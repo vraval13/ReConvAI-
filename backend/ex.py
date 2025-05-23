@@ -197,54 +197,387 @@ def create_ppt_from_summary(summary_text, template_path):
     pptx_stream.seek(0)
     return pptx_stream
 
+import tempfile
+import os
+import pyttsx3
+import wave
+import struct
+import re
+import time
+
 def generate_podcast_audio(podcast_script, rate=150):
-    """Generate TTS audio with distinct voices for host and researcher."""
+    """Generate TTS audio with distinct voices for host and researcher using separate engines."""
     try:
         temp_dir = tempfile.mkdtemp()
         output_file = os.path.join(temp_dir, "podcast_audio.wav")
         
+        # Parse the script into speaker segments
+        segments = parse_podcast_script(podcast_script)
+        
+        if not segments:
+            raise Exception("No valid speaker segments found in script")
+        
+        print(f"Found {len(segments)} speaker segments")
+        
+        # Generate audio for each segment
+        audio_files = []
+        
+        for i, segment in enumerate(segments):
+            speaker = segment['speaker']
+            text = segment['text']
+            
+            if not text or len(text.strip()) < 3:
+                continue
+            
+            # Generate audio for this segment
+            segment_file = generate_speaker_audio(
+                text, 
+                speaker, 
+                temp_dir, 
+                f"segment_{i}", 
+                rate
+            )
+            
+            if segment_file and os.path.exists(segment_file):
+                audio_files.append(segment_file)
+                print(f"Generated audio for {speaker}: {text[:50]}...")
+        
+        if not audio_files:
+            raise Exception("No audio segments were successfully generated")
+        
+        # Combine all audio files
+        combine_audio_files(audio_files, output_file)
+        
+        # Clean up temporary segment files
+        for file in audio_files:
+            try:
+                os.remove(file)
+            except:
+                pass
+        
+        # Verify output
+        if not os.path.exists(output_file) or os.path.getsize(output_file) < 1000:
+            raise Exception("Final audio file was not created properly")
+        
+        print(f"Successfully generated podcast audio: {os.path.getsize(output_file)} bytes")
+        return output_file
+        
+    except Exception as e:
+        print(f"Error in generate_podcast_audio: {e}")
+        raise Exception(f"Error generating audio: {e}")
+
+
+def parse_podcast_script(script):
+    """Parse podcast script into speaker segments."""
+    segments = []
+    lines = [line.strip() for line in script.split('\n') if line.strip()]
+    
+    for line in lines:
+        # Skip empty lines or very short lines
+        if len(line) < 5:
+            continue
+        
+        # Try to identify speaker and extract text
+        speaker = "host"  # default
+        text = line
+        
+        # Check for different speaker patterns
+        if ':' in line:
+            before_colon = line.split(':', 1)[0].strip()
+            after_colon = line.split(':', 1)[1].strip()
+            
+            # Identify speaker based on keywords
+            before_lower = before_colon.lower()
+            
+            if any(keyword in before_lower for keyword in ['alex', 'host', 'interviewer']):
+                speaker = "host"
+                text = after_colon
+            elif any(keyword in before_lower for keyword in ['dr.', 'doctor', 'smith', 'researcher', 'expert', 'scientist']):
+                speaker = "expert"
+                text = after_colon
+            elif any(keyword in before_lower for keyword in ['narrator', 'introduction', 'conclusion']):
+                speaker = "narrator"
+                text = after_colon
+            else:
+                # If we can't identify the speaker, treat as narrator
+                speaker = "narrator"
+                text = line
+        
+        # Clean up text
+        text = text.strip()
+        if text and len(text) > 2:
+            segments.append({
+                'speaker': speaker,
+                'text': text
+            })
+    
+    return segments
+
+
+def generate_speaker_audio(text, speaker, temp_dir, filename, rate=150):
+    """Generate audio for a specific speaker with appropriate voice settings."""
+    try:
+        output_file = os.path.join(temp_dir, f"{filename}.wav")
+        
+        # Initialize TTS engine
+        engine = pyttsx3.init()
+        
+        # Get available voices
+        voices = engine.getProperty('voices')
+        
+        if not voices:
+            raise Exception("No TTS voices available")
+        
+        # Configure voice based on speaker
+        if speaker == "host":
+            # Use female voice with moderate rate
+            if len(voices) > 1:
+                engine.setProperty('voice', voices[1].id)  # Usually female
+            else:
+                engine.setProperty('voice', voices[0].id)
+            engine.setProperty('rate', rate)
+            engine.setProperty('volume', 0.9)
+            
+        elif speaker == "expert":
+            # Use male voice with slightly slower rate
+            engine.setProperty('voice', voices[0].id)  # Usually male
+            engine.setProperty('rate', rate - 20)  # Slightly slower for authority
+            engine.setProperty('volume', 0.95)
+            
+        else:  # narrator
+            # Use neutral voice
+            engine.setProperty('voice', voices[0].id)
+            engine.setProperty('rate', rate + 10)  # Slightly faster for narration
+            engine.setProperty('volume', 0.85)
+        
+        # Generate the audio
+        engine.save_to_file(text, output_file)
+        engine.runAndWait()
+        
+        # Give a small delay to ensure file is written
+        time.sleep(0.1)
+        
+        # Verify the file was created
+        if os.path.exists(output_file) and os.path.getsize(output_file) > 100:
+            return output_file
+        else:
+            print(f"Failed to generate audio for: {text[:30]}...")
+            return None
+            
+    except Exception as e:
+        print(f"Error generating audio for {speaker}: {e}")
+        return None
+
+
+def combine_audio_files(audio_files, output_file):
+    """Combine multiple audio files with natural pauses between speakers."""
+    try:
+        with wave.open(output_file, 'wb') as output_wav:
+            params_set = False
+            
+            for i, audio_file in enumerate(audio_files):
+                try:
+                    with wave.open(audio_file, 'rb') as input_wav:
+                        params = input_wav.getparams()
+                        
+                        if not params_set:
+                            output_wav.setparams(params)
+                            params_set = True
+                        
+                        # Write the audio data
+                        frames = input_wav.readframes(input_wav.getnframes())
+                        output_wav.writeframes(frames)
+                        
+                        # Add pause between segments (except for the last one)
+                        if i < len(audio_files) - 1:
+                            add_silence_to_wav(output_wav, 0.8, params)  # 0.8 second pause
+                            
+                except Exception as e:
+                    print(f"Error processing audio file {audio_file}: {e}")
+                    continue
+        
+        print(f"Successfully combined {len(audio_files)} audio segments")
+        
+    except Exception as e:
+        raise Exception(f"Error combining audio files: {e}")
+
+
+def add_silence_to_wav(wav_file, duration_seconds, params):
+    """Add silence to an open WAV file."""
+    try:
+        sample_rate = params.framerate
+        channels = params.nchannels
+        sample_width = params.sampwidth
+        
+        # Calculate number of frames for silence
+        silence_frames = int(duration_seconds * sample_rate)
+        
+        # Create silence data (zeros)
+        silence_data = b'\x00' * (silence_frames * channels * sample_width)
+        
+        # Write silence
+        wav_file.writeframes(silence_data)
+        
+    except Exception as e:
+        print(f"Error adding silence: {e}")
+
+
+def generate_simple_podcast_audio(podcast_script, rate=150):
+    """Simplified fallback version if the main function fails."""
+    try:
+        temp_dir = tempfile.mkdtemp()
+        output_file = os.path.join(temp_dir, "podcast_audio.wav")
+        
+        # Clean the script
+        clean_script = clean_script_for_tts(podcast_script)
+        
+        if not clean_script:
+            raise Exception("No valid content found in script")
+        
+        # Generate audio with single voice
         engine = pyttsx3.init()
         engine.setProperty('rate', rate)
-        voices = engine.getProperty('voices')
-        male_voice = voices[0].id
-        female_voice = voices[1].id
-
-        # Create a temporary file to store the combined audio
-        combined_audio = BytesIO()
-
-        # Process each line of the podcast script
-        for line in podcast_script.split('\n'):
-            line = line.strip()
-            if not line:
-                continue
-
-            if line.startswith("Alex:"):
-                engine.setProperty('voice', female_voice)
-                text = line.replace("Alex:", "").strip()
-            elif line.startswith("Dr. Smith:"):
-                engine.setProperty('voice', male_voice)
-                text = line.replace("Dr. Smith:", "").strip()
-            else:
-                continue
-
-            # Generate audio for the line and append it to the combined audio
-            temp_line_audio = os.path.join(temp_dir, "temp_line_audio.wav")
-            engine.save_to_file(text, temp_line_audio)
-            engine.runAndWait()
-
-            # Append the generated audio to the combined audio
-            with open(temp_line_audio, 'rb') as f:
-                combined_audio.write(f.read())
-            os.remove(temp_line_audio)
-
-        # Save the combined audio to the output file
-        with open(output_file, 'wb') as f:
-            f.write(combined_audio.getvalue())
-
-        return output_file
-    except Exception as e:
-        raise Exception(f"Error generating audio: {e}")
         
+        voices = engine.getProperty('voices')
+        if voices:
+            engine.setProperty('voice', voices[0].id)
+        
+        engine.save_to_file(clean_script, output_file)
+        engine.runAndWait()
+        
+        # Verify output
+        if not os.path.exists(output_file) or os.path.getsize(output_file) < 500:
+            raise Exception("Simple audio generation failed")
+        
+        return output_file
+        
+    except Exception as e:
+        raise Exception(f"Error in simple audio generation: {e}")
+
+
+def clean_script_for_tts(script):
+    """Clean the script for better TTS output."""
+    lines = script.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line or len(line) < 3:
+            continue
+        
+        # Remove speaker names and formatting
+        if ':' in line:
+            text = line.split(':', 1)[1].strip()
+        else:
+            text = line
+        
+        # Clean up text
+        text = re.sub(r'\s+', ' ', text)  # Multiple spaces to single space
+        text = re.sub(r'[^\w\s\.,!?;:-]', '', text)  # Remove special characters
+        
+        if text and len(text) > 2:
+            cleaned_lines.append(text)
+    
+    # Join with natural pauses
+    return ' ... '.join(cleaned_lines)
+
+
+# Alternative approach using separate audio streams
+def generate_dual_voice_podcast(podcast_script, rate=150):
+    """Generate podcast with clearly distinct voices using separate processing."""
+    try:
+        temp_dir = tempfile.mkdtemp()
+        output_file = os.path.join(temp_dir, "podcast_audio.wav")
+        
+        # Separate script by speakers
+        host_lines, expert_lines, timeline = separate_speakers(podcast_script)
+        
+        # Generate separate audio files
+        host_audio = generate_voice_audio(host_lines, "host", temp_dir, rate)
+        expert_audio = generate_voice_audio(expert_lines, "expert", temp_dir, rate)
+        
+        # Interleave based on timeline
+        interleave_audio_by_timeline(timeline, host_audio, expert_audio, output_file)
+        
+        # Cleanup
+        cleanup_temp_files([host_audio, expert_audio])
+        
+        return output_file
+        
+    except Exception as e:
+        raise Exception(f"Error in dual voice generation: {e}")
+
+
+def separate_speakers(script):
+    """Separate script into host and expert lines with timeline."""
+    host_lines = []
+    expert_lines = []
+    timeline = []  # [(speaker, index), ...]
+    
+    lines = [line.strip() for line in script.split('\n') if line.strip()]
+    
+    for line in lines:
+        if ':' in line:
+            speaker_part = line.split(':', 1)[0].lower()
+            text = line.split(':', 1)[1].strip()
+            
+            if any(keyword in speaker_part for keyword in ['alex', 'host']):
+                host_lines.append(text)
+                timeline.append(('host', len(host_lines) - 1))
+            elif any(keyword in speaker_part for keyword in ['dr.', 'smith', 'expert', 'researcher']):
+                expert_lines.append(text)
+                timeline.append(('expert', len(expert_lines) - 1))
+    
+    return host_lines, expert_lines, timeline
+
+
+def generate_voice_audio(lines, voice_type, temp_dir, rate):
+    """Generate audio for a specific voice type."""
+    if not lines:
+        return None
+    
+    output_file = os.path.join(temp_dir, f"{voice_type}_audio.wav")
+    combined_text = ' ... '.join(lines)
+    
+    engine = pyttsx3.init()
+    voices = engine.getProperty('voices')
+    
+    if voice_type == "host" and len(voices) > 1:
+        engine.setProperty('voice', voices[1].id)
+        engine.setProperty('rate', rate)
+    else:
+        engine.setProperty('voice', voices[0].id)
+        engine.setProperty('rate', rate - 15)
+    
+    engine.save_to_file(combined_text, output_file)
+    engine.runAndWait()
+    
+    return output_file if os.path.exists(output_file) else None
+
+
+def interleave_audio_by_timeline(timeline, host_audio, expert_audio, output_file):
+    """Interleave audio segments based on timeline."""
+    # This is a simplified version - in practice you'd need more sophisticated audio processing
+    # For now, just combine the existing files
+    if host_audio and expert_audio:
+        combine_audio_files([host_audio, expert_audio], output_file)
+    elif host_audio:
+        import shutil
+        shutil.copy2(host_audio, output_file)
+    elif expert_audio:
+        import shutil
+        shutil.copy2(expert_audio, output_file)
+
+
+def cleanup_temp_files(file_list):
+    """Clean up temporary files."""
+    for file_path in file_list:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except:
+                pass
+                    
 @app.route('/process-input', methods=['POST'])
 def handle_process_input():
     try:
