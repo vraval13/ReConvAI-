@@ -1,0 +1,13 @@
+flask
+flask-cors
+pyttsx3
+python-pptx
+google-generativeai
+langchain-community
+streamlit
+torch
+diffusers
+transformers
+textwrap
+math
+gradio_client
