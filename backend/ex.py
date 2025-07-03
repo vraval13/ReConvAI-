@@ -837,7 +837,7 @@ comic_config = {
 }
 
 # Initialize the Gradio client (add this after other initializations)
-comic_client = Client("gabrielchua/open-notebooklm")
+# comic_client = Client("gabrielchua/open-notebooklm")
 
 # Initialize Stable Diffusion (add this after other initializations)
 try:
@@ -1193,33 +1193,53 @@ def generate_comic_from_dialogues(dialogues):
 
 ##code snippet got from the claude
 @app.route('/generate-comic', methods=['POST'])
+
 def handle_generate_comic():
     try:
-        # 1. Extract text from PDF
-        if 'pdf' not in request.files:
-            return jsonify({'error': 'No PDF file provided'}), 400
-            
-        file = request.files['pdf']
-        if file.filename == '':
-            return jsonify({'error': 'Empty filename'}), 400
-            
-        if not file.filename.lower().endswith('.pdf'):
-            return jsonify({'error': 'Only PDF files allowed'}), 400
+        text_content = None
+        
+        # 1. Extract content from either PDF or text input
+        # Check if text content is provided first
+        if 'content' in request.form and request.form['content'].strip():
+            text_content = request.form['content'].strip()
+        elif 'pdf' in request.files:
+            # Handle PDF upload
+            file = request.files['pdf']
+            if file.filename == '':
+                return jsonify({'error': 'Empty filename'}), 400
+                
+            if not file.filename.lower().endswith('.pdf'):
+                return jsonify({'error': 'Only PDF files allowed'}), 400
 
-        with tempfile.NamedTemporaryFile(delete=False) as temp_pdf:
-            file.save(temp_pdf.name)
-            temp_pdf_path = temp_pdf.name
-        try:
-            loader = PyPDFLoader(temp_pdf_path)
-            documents = loader.load()
-            text_content = "\n".join([doc.page_content for doc in documents])
-        finally:
-            if os.path.exists(temp_pdf_path):
-                try:
-                    os.remove(temp_pdf_path)
-                except Exception as e:
-                    print(f"Warning: Could not delete temp file: {e}")
-
+            # Save PDF temporarily and extract text
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
+                file.save(temp_pdf.name)
+                temp_pdf_path = temp_pdf.name
+            
+            try:
+                loader = PyPDFLoader(temp_pdf_path)
+                documents = loader.load()
+                text_content = "\n".join([doc.page_content for doc in documents])
+                
+                if not text_content.strip():
+                    return jsonify({'error': 'No readable text found in PDF'}), 400
+                    
+            except Exception as e:
+                return jsonify({'error': f'Failed to extract text from PDF: {str(e)}'}), 400
+            finally:
+                # Clean up temporary file
+                if os.path.exists(temp_pdf_path):
+                    try:
+                        os.remove(temp_pdf_path)
+                    except Exception as e:
+                        print(f"Warning: Could not delete temp file: {e}")
+        else:
+            return jsonify({'error': 'No content provided. Please provide either text content or a PDF file.'}), 400
+            
+        # Validate we have content
+        if not text_content or len(text_content.strip()) < 50:
+            return jsonify({'error': 'Insufficient content provided. Please provide at least 50 characters of meaningful text.'}), 400
+            
         # 2. Generate natural conversation flow
         dialogue_prompt = f"""
 Create a comic-style conversation between two researchers (Alex and Jamie) discussing this research content.
@@ -1239,58 +1259,52 @@ Rules:
 - Use natural transitions between topics
 - Show enthusiasm and curiosity
 - Total 10-12 dialogue exchanges
+- Format each line as "Speaker: dialogue content"
 
 Research content:
 {text_content[:5000]}
 """
+        
         try:
             response = model.generate_content(dialogue_prompt)
             dialogue_script = response.text.strip()
+            
             # Clean and validate script
             dialogue_lines = []
             for line in dialogue_script.split('\n'):
-                if ':' in line and len(line.split(':', 1)[1].strip()) > 5:
-                    speaker, content = line.split(':', 1)
-                    speaker = speaker.strip()
-                    # Normalize names
-                    if "Alex" in speaker:
+                line = line.strip()
+                if ':' in line and len(line.split(':', 1)) == 2:
+                    speaker_part, content = line.split(':', 1)
+                    speaker_part = speaker_part.strip()
+                    content = content.strip()
+                    
+                    # Skip empty content
+                    if len(content) < 5:
+                        continue
+                        
+                    # Normalize speaker names
+                    if "Alex" in speaker_part or "alex" in speaker_part.lower():
                         speaker = "Alex"
                         gender = "male"
-                    else:
+                    elif "Jamie" in speaker_part or "jamie" in speaker_part.lower():
                         speaker = "Jamie"
                         gender = "female"
+                    else:
+                        continue  # Skip unrecognized speakers
+                    
                     dialogue_lines.append({
                         "speaker": speaker,
-                        "content": content.strip(),
+                        "content": content,
                         "gender": gender
                     })
             
-            # Ensure we have enough lines
+            # Ensure we have enough lines - provide fallback dialogue
             if len(dialogue_lines) < 8:
-                dialogue_lines = [
-                    {"speaker": "Alex", "content": "Hey Jamie! How's your research going?", "gender": "male"},
-                    {"speaker": "Jamie", "content": "Pretty good! Just analyzing some network security data. You?", "gender": "female"},
-                    {"speaker": "Alex", "content": "Interesting! I'm looking at healthcare system vulnerabilities.", "gender": "male"},
-                    {"speaker": "Jamie", "content": "That's timely - what specific issues are you finding?", "gender": "female"},
-                    {"speaker": "Alex", "content": "We're seeing unencrypted patient data transfers in 60% of cases.", "gender": "male"},
-                    {"speaker": "Jamie", "content": "Wow, that's concerning. What protocols are they using?", "gender": "female"},
-                    {"speaker": "Alex", "content": "Mostly legacy HTTP systems with no encryption layer.", "gender": "male"},
-                    {"speaker": "Jamie", "content": "We should document these risks and propose solutions.", "gender": "female"},
-                    {"speaker": "Alex", "content": "Exactly. I'm drafting mitigation strategies now.", "gender": "male"},
-                    {"speaker": "Jamie", "content": "Let's collaborate on this - security is everyone's concern!", "gender": "female"}
-                ]
+                dialogue_lines = generate_fallback_dialogue(text_content)
+                
         except Exception as e:
             print(f"Error generating dialogue: {str(e)}")
-            dialogue_lines = [
-                {"speaker": "Alex", "content": "Hi Jamie! Ready to dive into this research?", "gender": "male"},
-                {"speaker": "Jamie", "content": "Absolutely! I've been reviewing the initial findings.", "gender": "female"},
-                {"speaker": "Alex", "content": "What stands out to you about the methodology?", "gender": "male"},
-                {"speaker": "Jamie", "content": "The attack simulation approach seems particularly thorough.", "gender": "female"},
-                {"speaker": "Alex", "content": "Yes, and the results show clear vulnerability patterns.", "gender": "male"},
-                {"speaker": "Jamie", "content": "We should highlight the encryption gaps in our report.", "gender": "female"},
-                {"speaker": "Alex", "content": "Good point. Let's include specific remediation steps too.", "gender": "male"},
-                {"speaker": "Jamie", "content": "Agreed. This could really improve healthcare security.", "gender": "female"}
-            ]
+            dialogue_lines = generate_fallback_dialogue(text_content)
 
         # 3. Generate avatar images for each character
         # Pre-define avatar characteristics to maintain consistency
@@ -1319,7 +1333,7 @@ Research content:
             }
         }
 
-        # 3. Generate comic panels with human conversations and tech backgrounds
+        # Generate comic panels with human conversations and tech backgrounds
         panel_images = []
         base_width, base_height = 512, 512  # Square panels for grid
 
@@ -1348,9 +1362,7 @@ Research content:
                             num_inference_steps=50
                         ).images[0]
                     else:
-                        # Fallback image generation using another method
-                        # This would be where you'd implement alternative avatar generation
-                        # For now, create a placeholder
+                        # Fallback image generation
                         avatar_image = create_placeholder_avatar(character, emotion, base_width, base_height)
                 except Exception as e:
                     print(f"Error generating avatar for {cache_key}: {str(e)}")
@@ -1403,15 +1415,7 @@ Research content:
             gender = line_data["gender"]
             
             # Determine emotion from content
-            emotion = "greeting"
-            if "?" in content:
-                emotion = "question"
-            elif any(word in content.lower() for word in ["concern", "problem", "issue", "worry"]):
-                emotion = "concern"
-            elif any(word in content.lower() for word in ["great", "excellent", "amazing", "exciting"]):
-                emotion = "excited"
-            else:
-                emotion = "thoughtful"
+            emotion = determine_emotion(content)
                 
             # Get avatar from cache
             avatar_key = f"{speaker}_{emotion}"
@@ -1430,114 +1434,11 @@ Research content:
             background = background_cache[i % len(background_settings)]
             
             # Create panel with both background and avatar
-            panel = Image.new('RGB', (base_width, base_height), (255, 255, 255))
-            
-            # Paste background first
-            panel.paste(background, (0, 0))
-            
-            # Crop avatar to focus on face and upper body (top 60%)
-            avatar_crop = avatar.crop((0, 0, avatar.width, int(avatar.height * 0.6)))
-            
-            # Resize avatar to fit in panel
-            avatar_width = int(base_width * 0.6)
-            avatar_height = int(avatar_width * avatar_crop.height / avatar_crop.width)
-            avatar_resized = avatar_crop.resize((avatar_width, avatar_height), Image.LANCZOS)
-            
-            # Position avatar at bottom of panel
-            avatar_x = int((base_width - avatar_width) / 2)
-            avatar_y = base_height - avatar_height
-            
-            # Create avatar mask for smooth blending
-            mask = Image.new('L', (avatar_width, avatar_height), 0)
-            mask_draw = ImageDraw.Draw(mask)
-            mask_draw.ellipse((0, 0, avatar_width, avatar_height * 2), fill=255)
-            
-            # Paste avatar onto panel with mask
-            panel.paste(avatar_resized, (avatar_x, avatar_y), mask)
-            
-            # Draw speech bubble
-            draw = ImageDraw.Draw(panel)
-            try:
-                font = ImageFont.truetype("arial.ttf", 18)
-                title_font = ImageFont.truetype("arial.ttf", 22)
-            except:
-                font = ImageFont.load_default()
-                title_font = ImageFont.load_default()
-
-            # Speech bubble at top
-            bubble_margin = 20
-            bubble_width = base_width - 2 * bubble_margin
-            bubble_height = 120
-            bubble_y = bubble_margin
-
-            # Draw bubble with color based on speaker
-            bubble_color = "#3377cc" if speaker == "Alex" else "#cc3377"
-            
-            draw.rounded_rectangle(
-                [bubble_margin, bubble_y, bubble_margin + bubble_width, bubble_y + bubble_height],
-                radius=15, fill="white", outline=bubble_color, width=3
-            )
-
-            # Bubble tail pointing to speaker
-            tail_x = base_width // 2
-            draw.polygon([
-                (tail_x - 15, bubble_y + bubble_height),
-                (tail_x + 15, bubble_y + bubble_height),
-                (tail_x, bubble_y + bubble_height + 15)
-            ], fill="white", outline=bubble_color, width=3)
-
-            # Speaker name in color
-            draw.text((bubble_margin + 15, bubble_y + 10), speaker, fill=bubble_color, font=title_font)
-
-            # Content text
-            wrapped_text = textwrap.fill(content, width=32)
-            draw.text((bubble_margin + 15, bubble_y + 40), wrapped_text, fill="black", font=font)
-
+            panel = create_comic_panel(background, avatar, speaker, content, base_width, base_height)
             panel_images.append(panel)
 
         # 4. Create comic page layout
-        page_width = 1100
-        page_margins = 50
-        panel_margin = 20
-        panels_per_row = 2
-        panel_width = (page_width - 2 * page_margins - (panels_per_row - 1) * panel_margin) // panels_per_row
-        
-        # Calculate height needed for each panel (maintaining aspect ratio)
-        panel_height = panel_width
-        
-        # Calculate total height needed
-        rows = math.ceil(len(panel_images) / panels_per_row)
-        page_height = 2 * page_margins + rows * panel_height + (rows - 1) * panel_margin
-        
-        # Create the comic page
-        comic_page = Image.new('RGB', (page_width, page_height), (240, 240, 240))
-        
-        # Place each panel on the page
-        for i, panel in enumerate(panel_images):
-            row = i // panels_per_row
-            col = i % panels_per_row
-            
-            x = page_margins + col * (panel_width + panel_margin)
-            y = page_margins + row * (panel_height + panel_margin)
-            
-            # Resize panel to fit layout
-            resized_panel = panel.resize((panel_width, panel_height), Image.LANCZOS)
-            comic_page.paste(resized_panel, (x, y))
-            
-            # Add panel border
-            draw = ImageDraw.Draw(comic_page)
-            draw.rectangle([x, y, x + panel_width, y + panel_height], outline=(0, 0, 0), width=2)
-
-        # Add title at the top
-        draw = ImageDraw.Draw(comic_page)
-        try:
-            title_font = ImageFont.truetype("arial.ttf", 36)
-        except:
-            title_font = ImageFont.load_default()
-            
-        title = "Research Discussion Comic"
-        title_width, title_height = draw.textsize(title, font=title_font) if hasattr(draw, 'textsize') else (300, 40)
-        draw.text(((page_width - title_width) // 2, page_margins // 2), title, fill=(0, 0, 0), font=title_font)
+        comic_page = create_comic_layout(panel_images)
 
         # Save final comic
         img_io = BytesIO()
@@ -1556,6 +1457,241 @@ Research content:
             'error': f"Failed to generate comic: {str(e)}",
             'traceback': traceback.format_exc()
         }), 500
+
+
+def generate_fallback_dialogue(text_content):
+    """Generate fallback dialogue based on content analysis"""
+    # Analyze content for key topics
+    content_lower = text_content.lower()
+    
+    # Determine research domain
+    if any(word in content_lower for word in ['security', 'cyber', 'attack', 'vulnerability']):
+        topic = "cybersecurity"
+    elif any(word in content_lower for word in ['health', 'medical', 'patient', 'clinical']):
+        topic = "healthcare"
+    elif any(word in content_lower for word in ['data', 'analysis', 'algorithm', 'machine learning']):
+        topic = "data science"
+    else:
+        topic = "research"
+    
+    # Generate contextual dialogue
+    dialogue_templates = {
+        "cybersecurity": [
+            {"speaker": "Alex", "content": "Hey Jamie! I've been reviewing the latest security assessment.", "gender": "male"},
+            {"speaker": "Jamie", "content": "Great timing! I just finished analyzing the vulnerability patterns.", "gender": "female"},
+            {"speaker": "Alex", "content": "What did you find regarding the attack vectors?", "gender": "male"},
+            {"speaker": "Jamie", "content": "The data shows significant gaps in encryption protocols.", "gender": "female"},
+            {"speaker": "Alex", "content": "That's concerning. Are there specific systems at risk?", "gender": "male"},
+            {"speaker": "Jamie", "content": "Yes, particularly the legacy systems with outdated security measures.", "gender": "female"},
+            {"speaker": "Alex", "content": "We should prioritize updating those systems immediately.", "gender": "male"},
+            {"speaker": "Jamie", "content": "Agreed. I'll draft the security recommendations for implementation.", "gender": "female"},
+            {"speaker": "Alex", "content": "Perfect. This research could prevent serious breaches.", "gender": "male"},
+            {"speaker": "Jamie", "content": "Absolutely. Prevention is always better than response.", "gender": "female"}
+        ],
+        "healthcare": [
+            {"speaker": "Alex", "content": "Jamie, I've been studying the patient data trends.", "gender": "male"},
+            {"speaker": "Jamie", "content": "Excellent! I'm analyzing the treatment outcomes as well.", "gender": "female"},
+            {"speaker": "Alex", "content": "What patterns are emerging from your analysis?", "gender": "male"},
+            {"speaker": "Jamie", "content": "The data suggests improved outcomes with early intervention.", "gender": "female"},
+            {"speaker": "Alex", "content": "That aligns with our hypothesis about preventive care.", "gender": "male"},
+            {"speaker": "Jamie", "content": "Yes, and the cost-benefit analysis is quite compelling.", "gender": "female"},
+            {"speaker": "Alex", "content": "This could significantly impact healthcare policy decisions.", "gender": "male"},
+            {"speaker": "Jamie", "content": "We should present these findings to the medical board.", "gender": "female"},
+            {"speaker": "Alex", "content": "Great idea. Patient outcomes are our top priority.", "gender": "male"},
+            {"speaker": "Jamie", "content": "This research could help save lives and reduce costs.", "gender": "female"}
+        ],
+        "data science": [
+            {"speaker": "Alex", "content": "Jamie, the data analysis results are fascinating!", "gender": "male"},
+            {"speaker": "Jamie", "content": "I know! The machine learning models are performing well.", "gender": "female"},
+            {"speaker": "Alex", "content": "What's the accuracy rate on the latest algorithm?", "gender": "male"},
+            {"speaker": "Jamie", "content": "We're seeing 94% accuracy with the new feature set.", "gender": "female"},
+            {"speaker": "Alex", "content": "That's impressive! How did you optimize the parameters?", "gender": "male"},
+            {"speaker": "Jamie", "content": "Cross-validation and careful hyperparameter tuning were key.", "gender": "female"},
+            {"speaker": "Alex", "content": "The practical applications for this are enormous.", "gender": "male"},
+            {"speaker": "Jamie", "content": "Yes, it could revolutionize how we process this data.", "gender": "female"},
+            {"speaker": "Alex", "content": "Let's prepare a comprehensive report on our findings.", "gender": "male"},
+            {"speaker": "Jamie", "content": "Agreed. This breakthrough deserves proper documentation.", "gender": "female"}
+        ],
+        "research": [
+            {"speaker": "Alex", "content": "Hi Jamie! How's your research project progressing?", "gender": "male"},
+            {"speaker": "Jamie", "content": "Really well! I'm seeing some interesting patterns emerge.", "gender": "female"},
+            {"speaker": "Alex", "content": "That's exciting! What methodology are you using?", "gender": "male"},
+            {"speaker": "Jamie", "content": "A mixed-methods approach with quantitative and qualitative analysis.", "gender": "female"},
+            {"speaker": "Alex", "content": "Smart choice. What are your preliminary findings?", "gender": "male"},
+            {"speaker": "Jamie", "content": "The data suggests our initial hypothesis was correct.", "gender": "female"},
+            {"speaker": "Alex", "content": "Excellent! What are the implications for future work?", "gender": "male"},
+            {"speaker": "Jamie", "content": "This opens up several new research avenues to explore.", "gender": "female"},
+            {"speaker": "Alex", "content": "We should document these findings thoroughly.", "gender": "male"},
+            {"speaker": "Jamie", "content": "Absolutely. This could be the foundation for future studies.", "gender": "female"}
+        ]
+    }
+    
+    return dialogue_templates.get(topic, dialogue_templates["research"])
+
+
+def determine_emotion(content):
+    """Determine emotion based on dialogue content"""
+    content_lower = content.lower()
+    
+    if "?" in content:
+        return "question"
+    elif any(word in content_lower for word in ["concern", "problem", "issue", "worry", "risk"]):
+        return "concern"
+    elif any(word in content_lower for word in ["great", "excellent", "amazing", "exciting", "perfect"]):
+        return "excited"
+    elif any(word in content_lower for word in ["hi", "hello", "hey", "good"]):
+        return "greeting"
+    else:
+        return "thoughtful"
+
+
+def create_comic_panel(background, avatar, speaker, content, base_width, base_height):
+    """Create a single comic panel with background, avatar, and speech bubble"""
+    panel = Image.new('RGB', (base_width, base_height), (255, 255, 255))
+    
+    # Paste background first
+    panel.paste(background, (0, 0))
+    
+    # Crop avatar to focus on face and upper body (top 60%)
+    avatar_crop = avatar.crop((0, 0, avatar.width, int(avatar.height * 0.6)))
+    
+    # Resize avatar to fit in panel
+    avatar_width = int(base_width * 0.6)
+    avatar_height = int(avatar_width * avatar_crop.height / avatar_crop.width)
+    avatar_resized = avatar_crop.resize((avatar_width, avatar_height), Image.LANCZOS)
+    
+    # Position avatar at bottom of panel
+    avatar_x = int((base_width - avatar_width) / 2)
+    avatar_y = base_height - avatar_height
+    
+    # Create avatar mask for smooth blending
+    mask = Image.new('L', (avatar_width, avatar_height), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.ellipse((0, 0, avatar_width, avatar_height * 2), fill=255)
+    
+    # Paste avatar onto panel with mask
+    panel.paste(avatar_resized, (avatar_x, avatar_y), mask)
+    
+    # Draw speech bubble
+    draw = ImageDraw.Draw(panel)
+    try:
+        font = ImageFont.truetype("arial.ttf", 18)
+        title_font = ImageFont.truetype("arial.ttf", 22)
+    except:
+        font = ImageFont.load_default()
+        title_font = ImageFont.load_default()
+
+    # Speech bubble at top
+    bubble_margin = 20
+    bubble_width = base_width - 2 * bubble_margin
+    bubble_height = 120
+    bubble_y = bubble_margin
+
+    # Draw bubble with color based on speaker
+    bubble_color = "#3377cc" if speaker == "Alex" else "#cc3377"
+    
+    draw.rounded_rectangle(
+        [bubble_margin, bubble_y, bubble_margin + bubble_width, bubble_y + bubble_height],
+        radius=15, fill="white", outline=bubble_color, width=3
+    )
+
+    # Bubble tail pointing to speaker
+    tail_x = base_width // 2
+    draw.polygon([
+        (tail_x - 15, bubble_y + bubble_height),
+        (tail_x + 15, bubble_y + bubble_height),
+        (tail_x, bubble_y + bubble_height + 15)
+    ], fill="white", outline=bubble_color)
+
+    # Speaker name in color
+    draw.text((bubble_margin + 15, bubble_y + 10), speaker, fill=bubble_color, font=title_font)
+
+    # Content text
+    wrapped_text = textwrap.fill(content, width=32)
+    draw.text((bubble_margin + 15, bubble_y + 40), wrapped_text, fill="black", font=font)
+
+    return panel
+
+
+def create_comic_layout(panel_images):
+    """Create the final comic page layout"""
+    page_width = 1100
+    page_margins = 50
+    panel_margin = 20
+    panels_per_row = 2
+    panel_width = (page_width - 2 * page_margins - (panels_per_row - 1) * panel_margin) // panels_per_row
+    
+    # Calculate height needed for each panel (maintaining aspect ratio)
+    panel_height = panel_width
+    
+    # Calculate total height needed
+    rows = math.ceil(len(panel_images) / panels_per_row)
+    page_height = 2 * page_margins + rows * panel_height + (rows - 1) * panel_margin + 60  # Extra space for title
+    
+    # Create the comic page
+    comic_page = Image.new('RGB', (page_width, page_height), (240, 240, 240))
+    
+    # Add title at the top
+    draw = ImageDraw.Draw(comic_page)
+    try:
+        title_font = ImageFont.truetype("arial.ttf", 36)
+    except:
+        title_font = ImageFont.load_default()
+        
+    title = "Research Discussion Comic"
+    # For compatibility, calculate title dimensions manually
+    title_width = len(title) * 20  # Approximate width
+    title_height = 40
+    draw.text(((page_width - title_width) // 2, page_margins // 2), title, fill=(0, 0, 0), font=title_font)
+    
+    # Place each panel on the page
+    for i, panel in enumerate(panel_images):
+        row = i // panels_per_row
+        col = i % panels_per_row
+        
+        x = page_margins + col * (panel_width + panel_margin)
+        y = page_margins + 60 + row * (panel_height + panel_margin)  # 60px offset for title
+        
+        # Resize panel to fit layout
+        resized_panel = panel.resize((panel_width, panel_height), Image.LANCZOS)
+        comic_page.paste(resized_panel, (x, y))
+        
+        # Add panel border
+        draw.rectangle([x, y, x + panel_width, y + panel_height], outline=(0, 0, 0), width=2)
+    
+    return comic_page
+
+
+def create_placeholder_avatar(character, emotion, width, height):
+    """Create a placeholder avatar when AI generation fails"""
+    img = Image.new('RGB', (width, height), (200, 200, 200))
+    draw = ImageDraw.Draw(img)
+    
+    try:
+        font = ImageFont.truetype("arial.ttf", 24)
+    except:
+        font = ImageFont.load_default()
+    
+    text = f"{character}\n({emotion})"
+    draw.text((width//4, height//2), text, fill=(0, 0, 0), font=font)
+    
+    return img
+
+
+def create_placeholder_background(setting, width, height):
+    """Create a placeholder background when AI generation fails"""
+    img = Image.new('RGB', (width, height), (150, 150, 150))
+    draw = ImageDraw.Draw(img)
+    
+    try:
+        font = ImageFont.truetype("arial.ttf", 16)
+    except:
+        font = ImageFont.load_default()
+    
+    wrapped_setting = textwrap.fill(setting, width=20)
+    draw.text((20, height//2), wrapped_setting, fill=(255, 255, 255), font=font)
+    
+    return img
 
 def create_placeholder_avatar(character, emotion, width, height):
     """Create a placeholder avatar when image generation fails"""
