@@ -375,9 +375,28 @@ export function MainConverter() {
   };
   return (
     <div className="space-y-8 animate-fade-in">
-      <Link href={"/comic-generation"} passHref>
-        <Button className="mt-4">Try New Feature</Button>
-      </Link>
+      <div>
+        <Link
+          href={"/comic-generation"}
+          className="text-blue-500 hover:underline"
+          passHref
+        >
+          <Button className="w-full md:w-auto px-8 py-6 text-lg transition-all">
+            Try Comic Generation!
+          </Button>
+        </Link>
+      </div>
+      <div>
+        <Link
+          href="mcq-generation"
+          className="text-blue-500 hover:underline"
+          passHref
+        >
+          <Button className="w-full md:w-auto px-8 py-6 text-lg transition-all">
+            Try MCQ Generation!
+          </Button>
+        </Link>
+      </div>
       <InputSection formData={formData} setFormData={setFormData} />
       <OptionsSection formData={formData} setFormData={setFormData} />
 
