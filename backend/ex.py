@@ -1573,400 +1573,6 @@ def create_placeholder_background(setting, width, height):
     
     return background
 
-## little bit working, but the text content is static not dynamic for each attached pdf 
-# @app.route('/generate-comic', methods=['POST'])
-# def handle_generate_comic():
-#     try:
-#         # 1. Get text content (simplified for this example)
-#         text_content = """
-#         Researcher1: Healthcare systems are vulnerable to cyber attacks.
-#         Researcher2: Yes, we analyzed networks using Wireshark.
-#         Researcher1: What did you find?
-#         Researcher2: Many security holes in packet transmissions!
-#         Researcher1: That's dangerous for patient data.
-#         Researcher2: Exactly! We need better protection.
-#         Researcher1: How can hospitals improve security?
-#         Researcher2: Regular network monitoring is essential.
-#         Researcher1: What tools do you recommend?
-#         Researcher2: Wireshark helps detect intrusions.
-#         Researcher1: Let's publish these findings!
-#         Researcher2: Agreed, awareness is crucial.
-#         """
-        
-#         # 2. Split into conversation lines
-#         panels_text = [line.strip() for line in text_content.split('\n') if line.strip()]
-#         panels_text = panels_text[:12]  # Limit to 12 panels max
-
-#         # 3. Generate smaller comic panel images (300x300) with simple dialogues
-#         panel_images = []
-#         for panel_text in panels_text:
-#             # Generate simpler AI image prompt based on content
-#             prompt = "Digital healthcare security, comic book style: " + panel_text.split(':')[1][:30]
-            
-#             # Create smaller image (300x300)
-#             if comic_pipe:
-#                 img = comic_pipe(prompt).images[0].resize((300, 300))
-#             else:
-#                 img = Image.new('RGB', (300, 300), color=(245,245,245))
-                
-#             # Add simpler speech bubble at bottom
-#             draw = ImageDraw.Draw(img)
-#             try:
-#                 font = ImageFont.truetype("arial.ttf", 16)
-#             except:
-#                 font = ImageFont.load_default()
-                
-#             # Speech bubble dimensions
-#             bubble_w = 280
-#             bubble_h = 60
-#             bubble_x = 10
-#             bubble_y = 230
-            
-#             # Draw bubble and text
-#             draw.rounded_rectangle(
-#                 [bubble_x, bubble_y, bubble_x+bubble_w, bubble_y+bubble_h],
-#                 radius=10, fill="white", outline="black", width=2
-#             )
-            
-#             # Split speaker and dialogue
-#             parts = panel_text.split(':')
-#             speaker = parts[0]
-#             dialogue = ':'.join(parts[1:])
-            
-#             # Add speaker tag
-#             draw.text((bubble_x+10, bubble_y+5), speaker, fill="blue", font=font)
-            
-#             # Add wrapped dialogue
-#             wrapped = textwrap.fill(dialogue, width=35)
-#             draw.text((bubble_x+10, bubble_y+25), wrapped, fill="black", font=font)
-            
-#             panel_images.append(img)
-
-#         # 4. Arrange panels into a grid (4x3 max)
-#         cols = min(4, len(panel_images))
-#         rows = (len(panel_images) + cols - 1) // cols
-#         grid_w = cols * 300
-#         grid_h = rows * 300
-#         grid_img = Image.new('RGB', (grid_w, grid_h), color=(255,255,255))
-        
-#         for idx, panel in enumerate(panel_images):
-#             x = (idx % cols) * 300
-#             y = (idx // cols) * 300
-#             grid_img.paste(panel, (x, y))
-
-#         # 5. Return the image
-#         img_io = BytesIO()
-#         grid_img.save(img_io, 'PNG')
-#         img_io.seek(0)
-
-#         return send_file(
-#             img_io,
-#             mimetype='image/png',
-#             as_attachment=True,
-#             download_name='healthcare-security-comic.png'
-#         )
-#     except Exception as e:
-#         return jsonify({'error': str(e)}), 500
-
-# @app.route('/generate-comic', methods=['POST'])
-# def handle_generate_comic():
-#     try:
-#         # 1. Get text content from PDF or text input
-#         if 'pdf' in request.files:
-#             file = request.files['pdf']
-#             if file.filename == '':
-#                 return jsonify({'error': 'No selected file'}), 400
-#             if not file.filename.lower().endswith('.pdf'):
-#                 return jsonify({'error': 'Only PDF files are allowed'}), 400
-
-#             temp_dir = tempfile.mkdtemp()
-#             temp_pdf_path = os.path.join(temp_dir, secure_filename(file.filename))
-#             file.save(temp_pdf_path)
-
-#             try:
-#                 loader = PyPDFLoader(temp_pdf_path)
-#                 documents = loader.load()
-#                 text_content = "\n".join([doc.page_content for doc in documents])
-#             finally:
-#                 if os.path.exists(temp_pdf_path):
-#                     try:
-#                         os.remove(temp_pdf_path)
-#                     except:
-#                         pass
-#         else:
-#             text_content = request.form.get('content')
-#             if not text_content:
-#                 return jsonify({'error': 'Content is required'}), 400
-
-#         # 2. Split content into 8-12 key sentences for comic panels
-#         import re
-#         sentences = re.split(r'(?<=[.!?])\s+', text_content.strip())
-#         panels_text = [s for s in sentences if len(s) > 30][:12]  # Only take longer, meaningful sentences
-
-#         if len(panels_text) < 8:
-#             # If not enough sentences, split by lines or use shorter ones
-#             panels_text = text_content.strip().split('\n')
-#             panels_text = [s for s in panels_text if len(s) > 10][:12]
-
-#         if not panels_text:
-#             panels_text = [text_content[:100]]
-
-#         # 3. Generate comic panel images and overlay speech bubbles
-#         panel_images = []
-#         for panel_text in panels_text:
-#             # Generate AI image for each panel
-#             prompt = f"Comic book style illustration: {panel_text[:100]}"
-#             if comic_pipe:
-#                 img = comic_pipe(prompt).images[0].resize((512, 512))
-#             else:
-#                 img = Image.new('RGB', (512, 512), color=(255,255,255))
-#             # Add speech bubble
-#             draw = ImageDraw.Draw(img)
-#             try:
-#                 font = ImageFont.truetype("arial.ttf", 28)
-#             except:
-#                 font = ImageFont.load_default()
-#             bubble_w = 480
-#             bubble_h = 80
-#             draw.rectangle([16, 16, 16+bubble_w, 16+bubble_h], fill=(255,255,255,220), outline="black", width=3)
-#             wrapped = textwrap.fill(panel_text, width=40)
-#             draw.text((28, 28), wrapped, fill=(0,0,0), font=font)
-#             panel_images.append(img)
-
-#         # 4. Arrange panels into a grid (e.g., 3x4)
-#         cols = 4
-#         rows = (len(panel_images) + cols - 1) // cols
-#         grid_w = cols * 512
-#         grid_h = rows * 512
-#         grid_img = Image.new('RGB', (grid_w, grid_h), color=(255,255,255))
-#         for idx, panel in enumerate(panel_images):
-#             x = (idx % cols) * 512
-#             y = (idx // cols) * 512
-#             grid_img.paste(panel, (x, y))
-
-#         # 5. Return the image as a response
-#         img_io = BytesIO()
-#         grid_img.save(img_io, 'PNG')
-#         img_io.seek(0)
-
-#         return send_file(
-#             img_io,
-#             mimetype='image/png',
-#             as_attachment=True,
-#             download_name='comic.png'
-#         )
-#     except Exception as e:
-#         return jsonify({
-#             'error': f'Error generating comic: {str(e)}',
-#             'traceback': traceback.format_exc()
-#         }), 500
-
-# @app.route('/generate-comic', methods=['POST'])
-# def handle_generate_comic():
-#     try:
-#         # 1. Get text content from PDF or text input
-#         if 'pdf' in request.files:
-#             file = request.files['pdf']
-#             if file.filename == '':
-#                 return jsonify({'error': 'No selected file'}), 400
-#             if not file.filename.lower().endswith('.pdf'):
-#                 return jsonify({'error': 'Only PDF files are allowed'}), 400
-
-#             temp_dir = tempfile.mkdtemp()
-#             temp_pdf_path = os.path.join(temp_dir, secure_filename(file.filename))
-#             file.save(temp_pdf_path)
-
-#             try:
-#                 loader = PyPDFLoader(temp_pdf_path)
-#                 documents = loader.load()
-#                 text_content = "\n".join([doc.page_content for doc in documents])
-#             finally:
-#                 if os.path.exists(temp_pdf_path):
-#                     try:
-#                         os.remove(temp_pdf_path)
-#                     except:
-#                         pass
-#         else:
-#             text_content = request.form.get('content')
-#             if not text_content:
-#                 return jsonify({'error': 'Content is required'}), 400
-
-#         # 2. Summarize or extract a main idea for the comic prompt
-#         prompt = f"Comic book style illustration summarizing: {text_content[:300]}"
-
-#         # 3. Generate image using Stable Diffusion if available
-#         if comic_pipe:
-#             image = comic_pipe(prompt).images[0]
-#             image = image.resize((800, 600))
-#         else:
-#             # Fallback: plain white image
-#             from PIL import Image
-#             image = Image.new('RGB', (800, 600), color=(255, 255, 255))
-
-#         # 4. Overlay a comic title or speech bubble
-#         from PIL import ImageDraw, ImageFont
-#         draw = ImageDraw.Draw(image)
-#         try:
-#             font = ImageFont.truetype("arial.ttf", 40)
-#         except:
-#             font = ImageFont.load_default()
-#         # Draw a simple speech bubble or title at the top
-#         title = "AI Comic"
-#         draw.rectangle([30, 30, 770, 110], fill=(255,255,255,200), outline="black", width=3)
-#         draw.text((50, 50), title, fill=(0,0,0), font=font)
-
-#         # Optionally, add a short summary at the bottom
-#         summary = text_content[:80] + ("..." if len(text_content) > 80 else "")
-#         draw.rectangle([30, 500, 770, 580], fill=(255,255,255,200), outline="black", width=3)
-#         draw.text((50, 520), summary, fill=(0,0,0), font=font)
-
-#         # 5. Return the image as a response
-#         img_io = BytesIO()
-#         image.save(img_io, 'PNG')
-#         img_io.seek(0)
-
-#         return send_file(
-#             img_io,
-#             mimetype='image/png',
-#             as_attachment=True,
-#             download_name='comic.png'
-#         )
-#     except Exception as e:
-#         return jsonify({
-#             'error': f'Error generating comic: {str(e)}',
-#             'traceback': traceback.format_exc()
-#         }), 500
-
-# @app.route('/generate-comic', methods=['POST'])
-# def handle_generate_comic():
-#     try:
-#         # If PDF is uploaded
-#         if 'pdf' in request.files:
-#             file = request.files['pdf']
-#             if file.filename == '':
-#                 return jsonify({'error': 'No selected file'}), 400
-#             if not file.filename.lower().endswith('.pdf'):
-#                 return jsonify({'error': 'Only PDF files are allowed'}), 400
-
-#             temp_dir = tempfile.mkdtemp()
-#             temp_pdf_path = os.path.join(temp_dir, secure_filename(file.filename))
-#             file.save(temp_pdf_path)
-
-#             try:
-#                 loader = PyPDFLoader(temp_pdf_path)
-#                 documents = loader.load()
-#                 text_content = "\n".join([doc.page_content for doc in documents])
-#             finally:
-#                 if os.path.exists(temp_pdf_path):
-#                     try:
-#                         os.remove(temp_pdf_path)
-#                     except:
-#                         pass
-#         else:
-#             # If text content is provided
-#             text_content = request.form.get('content')
-#             if not text_content:
-#                 return jsonify({'error': 'Content is required'}), 400
-
-#         # Now, generate a comic image from text_content
-#         # For demonstration, create a simple comic image with PIL
-#         from PIL import Image, ImageDraw, ImageFont
-#         import io
-
-#         img = Image.new('RGB', (800, 600), color=(255, 255, 255))
-#         d = ImageDraw.Draw(img)
-#         try:
-#             font = ImageFont.truetype("arial.ttf", 40)
-#         except:
-#             font = ImageFont.load_default()
-#         d.text((50, 50), "Generated Comic", fill=(0, 0, 0), font=font)
-#         d.text((50, 150), text_content[:200] + "...", fill=(0, 0, 0), font=font)
-
-#         img_io = io.BytesIO()
-#         img.save(img_io, 'PNG')
-#         img_io.seek(0)
-
-#         return send_file(
-#             img_io,
-#             mimetype='image/png',
-#             as_attachment=True,
-#             download_name='comic.png'
-#         )
-#     except Exception as e:
-#         return jsonify({
-#             'error': f'Error generating comic: {str(e)}',
-#             'traceback': traceback.format_exc()
-#         }), 500
-
-# @app.route('/generate-comic', methods=['POST'])
-# def generate_comic():
-#     try:
-#         # Check if request contains file upload
-#         if 'pdf' in request.files:
-#             file = request.files['pdf']
-#             if file.filename == '':
-#                 return jsonify({'error': 'No selected file'}), 400
-            
-#             if not file.filename.lower().endswith('.pdf'):
-#                 return jsonify({'error': 'Only PDF files are allowed'}), 400
-                
-#             # Process PDF file
-#             temp_dir = tempfile.mkdtemp()
-#             temp_pdf_path = os.path.join(temp_dir, secure_filename(file.filename))
-#             file.save(temp_pdf_path)
-            
-#             try:
-#                 loader = PyPDFLoader(temp_pdf_path)
-#                 documents = loader.load()
-#                 text_content = "\n".join([doc.page_content for doc in documents])
-#             finally:
-#                 if os.path.exists(temp_pdf_path):
-#                     try:
-#                         os.remove(temp_pdf_path)
-#                     except:
-#                         pass
-#         else:
-#             # Process text content
-#             text_content = request.form.get('content')
-#             if not text_content:
-#                 return jsonify({'error': 'Content is required'}), 400
-
-#         # Generate comic from text_content using your AI model
-#         # Replace this with your actual comic generation logic
-#         # For now, we'll just return a placeholder
-        
-#         # Create a simple image with PIL for demonstration
-#         from PIL import Image, ImageDraw, ImageFont
-#         import io
-        
-#         img = Image.new('RGB', (800, 600), color=(255, 255, 255))
-#         d = ImageDraw.Draw(img)
-        
-#         try:
-#             font = ImageFont.truetype("arial.ttf", 40)
-#         except:
-#             font = ImageFont.load_default()
-            
-#         d.text((50, 50), "Generated Comic", fill=(0, 0, 0), font=font)
-#         d.text((50, 150), text_content[:100] + "...", fill=(0, 0, 0), font=font)
-        
-#         img_io = io.BytesIO()
-#         img.save(img_io, 'PNG')
-#         img_io.seek(0)
-        
-#         return send_file(
-#             img_io,
-#             mimetype='image/png',
-#             as_attachment=True,
-#             download_name='comic.png'
-#         )
-        
-#     except Exception as e:
-#         return jsonify({
-#             'error': f'Internal server error: {str(e)}',
-#             'traceback': traceback.format_exc()
-#         }), 500
-
 ## a bit good approach for video
 @app.route('/generate-video', methods=['POST'])
 def generate_video():
@@ -2143,6 +1749,75 @@ def generate_video():
             'error': f'Error generating video: {str(e)}',
             'traceback': traceback.format_exc()
         }), 500
+
+## A new feature for mcq generation
+def generate_mcqs_from_content(text, num_questions=5):
+    """Generate MCQs using Gemini from the given content."""
+    prompt = f"""
+Based on the following research content, generate {num_questions} multiple-choice questions (MCQs) for students. 
+Each MCQ should have:
+- A question (1-2 lines)
+- Four options (A, B, C, D)
+- The correct answer (just the letter)
+- A 1-line explanation for the correct answer
+
+Format:
+Q1: <question>
+A) <option A>
+B) <option B>
+C) <option C>
+D) <option D>
+Answer: <A/B/C/D>
+Explanation: <1-line explanation>
+
+Content:
+{text[:3000]}
+"""
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        raise Exception(f"Error generating MCQs: {e}")
+
+@app.route('/generate-mcq', methods=['POST'])
+def handle_generate_mcq():
+    try:
+        data = request.json
+        text = data.get('text')
+        num_questions = int(data.get('num_questions', 5))
+
+        if not text or len(text.strip()) < 30:
+            return jsonify({'error': 'Please provide sufficient content for MCQ generation.'}), 400
+
+        mcq_text = generate_mcqs_from_content(text, num_questions)
+        # Optionally, parse MCQs into a structured format for frontend
+        mcqs = []
+        import re
+        pattern = re.compile(
+        r"Q\d+:(.*?)\nA\)(.*?)\nB\)(.*?)\nC\)(.*?)\nD\)(.*?)\nAnswer:\s*([A-D])\nExplanation:(.*?)(?:\n|$)",
+        re.DOTALL
+        )
+        
+        for match in pattern.finditer(mcq_text):
+            mcqs.append({
+                "question": match.group(1).strip(),
+                "options": [
+                    match.group(2).strip(),
+                    match.group(3).strip(),
+                    match.group(4).strip(),
+                    match.group(5).strip()
+                ],
+                "answer": match.group(6).strip(),
+                "explanation":match.group(7).strip()
+            })
+
+        return jsonify({
+            "mcqs": mcqs,
+            "raw": mcq_text
+        }), 200
+    except Exception as e:
+        return jsonify({'error': f'Error generating MCQs: {str(e)}'}), 500
+
                                         
 if __name__ == '__main__':
     os.makedirs('templates', exist_ok=True)
