@@ -186,104 +186,94 @@ export default function MCQGenerator() {
             </Button>
           </div>
           {error && <div className="text-red-500 mb-2">{error}</div>}
-          {mcqs.length > 0 && (
-            <div className="space-y-4">
-              {mcqs.map((mcq, idx) => (
-                <div key={idx} className="p-3 border rounded bg-gray-50">
-                  <div className="font-medium">{`Q${idx + 1}: ${
-                    mcq.question
-                  }`}</div>
-                  <ul className="list-disc pl-6">
-                    {mcq.options.map((opt: string, i: number) => (
-                      <li key={i}>
-                        <span className="font-semibold">
-                          {String.fromCharCode(65 + i)})
-                        </span>{" "}
-                        {opt}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="text-green-600 mt-1">
-                    Answer: {mcq.answer}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
+
+        {/* MCQ Questions Section - Now properly aligned */}
+        {mcqs.length > 0 && (
+          <div className="max-w-2xl mx-auto my-8 space-y-6">
+            {mcqs.map((mcq: MCQ, idx: number) => (
+              <div key={idx} className="p-4 border rounded-lg bg-gray-50">
+                <div className="font-medium text-lg mb-3">{`Q${idx + 1}: ${
+                  mcq.question
+                }`}</div>
+                <div className="space-y-2">
+                  {mcq.options.map((opt: string, i: number) => {
+                    const optionLetter = String.fromCharCode(65 + i);
+                    const selected = userAnswers[idx] === optionLetter;
+                    const isCorrect = mcq.answer === optionLetter;
+                    let optionStyle =
+                      "cursor-pointer px-3 py-2 rounded-md border transition-colors duration-200 flex items-center";
+                    if (showResults) {
+                      if (selected && isCorrect)
+                        optionStyle += " bg-green-200 border-green-400";
+                      else if (selected && !isCorrect)
+                        optionStyle += " bg-red-200 border-red-400";
+                      else if (isCorrect)
+                        optionStyle += " bg-green-100 border-green-300";
+                      else optionStyle += " bg-white border-gray-300";
+                    } else if (selected) {
+                      optionStyle += " bg-blue-100 border-blue-300";
+                    } else {
+                      optionStyle +=
+                        " bg-white border-gray-300 hover:bg-gray-50";
+                    }
+                    return (
+                      <div
+                        key={i}
+                        className={optionStyle}
+                        onClick={() =>
+                          !showResults && handleOptionSelect(idx, optionLetter)
+                        }
+                      >
+                        <input
+                          type="radio"
+                          name={`mcq-${idx}`}
+                          value={optionLetter}
+                          checked={userAnswers[idx] === optionLetter}
+                          onChange={() => handleOptionSelect(idx, optionLetter)}
+                          disabled={showResults}
+                          className="mr-3"
+                        />
+                        <span className="font-semibold mr-2">
+                          {optionLetter})
+                        </span>
+                        <span>{opt}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                {showResults && (
+                  <div className="mt-4 p-3 bg-white rounded-md border">
+                    {userAnswers[idx] === mcq.answer ? (
+                      <span className="text-green-600 font-semibold">
+                        ✓ Correct!
+                      </span>
+                    ) : (
+                      <span className="text-red-600 font-semibold">
+                        ✗ Incorrect. Correct answer: {mcq.answer}
+                      </span>
+                    )}
+                    <div className="text-gray-700 text-sm mt-2">
+                      <strong>Explanation:</strong> {mcq.explanation}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+            {!showResults && (
+              <div className="text-center">
+                <Button
+                  onClick={handleCheckAnswers}
+                  disabled={userAnswers.some((ans) => ans === null)}
+                  className="px-6 py-2"
+                >
+                  Check Answers
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
-      {mcqs.length > 0 && (
-        <div className="space-y-4">
-          {mcqs.map((mcq: MCQ, idx: number) => (
-            <div key={idx} className="p-3 border rounded bg-gray-50">
-              <div className="font-medium">{`Q${idx + 1}: ${
-                mcq.question
-              }`}</div>
-              <ul className="list-none pl-0">
-                {mcq.options.map((opt: string, i: number) => {
-                  const optionLetter = String.fromCharCode(65 + i);
-                  const selected = userAnswers[idx] === optionLetter;
-                  const isCorrect = mcq.answer === optionLetter;
-                  let optionStyle = "cursor-pointer px-2 py-1 rounded";
-                  if (showResults) {
-                    if (selected && isCorrect) optionStyle += " bg-green-200";
-                    else if (selected && !isCorrect)
-                      optionStyle += " bg-red-200";
-                    else if (isCorrect) optionStyle += " bg-green-100";
-                  } else if (selected) {
-                    optionStyle += " bg-blue-100";
-                  }
-                  return (
-                    <li
-                      key={i}
-                      className={optionStyle}
-                      onClick={() =>
-                        !showResults && handleOptionSelect(idx, optionLetter)
-                      }
-                    >
-                      <input
-                        type="radio"
-                        name={`mcq-${idx}`}
-                        value={optionLetter}
-                        checked={userAnswers[idx] === optionLetter}
-                        onChange={() => handleOptionSelect(idx, optionLetter)}
-                        disabled={showResults}
-                        className="mr-2"
-                      />
-                      <span className="font-semibold">{optionLetter})</span>{" "}
-                      {opt}
-                    </li>
-                  );
-                })}
-              </ul>
-              {showResults && (
-                <div className="mt-2">
-                  {userAnswers[idx] === mcq.answer ? (
-                    <span className="text-green-600 font-semibold">
-                      Correct!
-                    </span>
-                  ) : (
-                    <span className="text-red-600 font-semibold">
-                      Incorrect. Correct answer: {mcq.answer}
-                    </span>
-                  )}
-                  <div className="text-gray-700 text-sm mt-1">
-                    Explanation: {mcq.explanation}
-                  </div>
-                </div>
-              )}
-            </div>
-          ))}
-          {!showResults && (
-            <Button
-              onClick={handleCheckAnswers}
-              disabled={userAnswers.some((ans) => ans === null)}
-            >
-              Check Answers
-            </Button>
-          )}
-        </div>
-      )}
     </div>
   );
 }
