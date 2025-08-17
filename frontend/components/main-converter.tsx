@@ -397,6 +397,17 @@ export function MainConverter() {
           </Button>
         </Link>
       </div>
+      <div>
+        <Link
+          href="rag-qa"
+          className="text-blue-500 hover:underline"
+          passHref
+        >
+          <Button className="w-full md:w-auto px-8 py-6 text-lg transition-all">
+            Try RAG Q&A!
+          </Button>
+        </Link>
+      </div>
       <InputSection formData={formData} setFormData={setFormData} />
       <OptionsSection formData={formData} setFormData={setFormData} />
 
