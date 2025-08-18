@@ -19,8 +19,76 @@ import math
 from PIL import Image, ImageDraw, ImageFont
 from gradio_client import Client, handle_file
 
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+from flask_bcrypt import Bcrypt
+import jwt
+import datetime
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+
+bcrypt = Bcrypt(app)
+app.config['SECRET_KEY'] = 'abc@123'  # Change this!
+
+# In-memory user store (replace with DB in production)
+from pymongo import MongoClient
+import os
+MONGO_URI ="mongodb+srv://ravalvyom17:8yShml4FgDywDCwX@cluster0.8gyywis.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+
+mongo_client = MongoClient(MONGO_URI)
+db = mongo_client["researchhive"]
+users_collection = db["users"]
+users = {}
+
+def generate_token(username):
+    payload = {
+        'username': username,
+        'exp': datetime.datetime.utcnow() + datetime.timedelta(hours=12)
+    }
+    return jwt.encode(payload, app.config['SECRET_KEY'], algorithm='HS256')
+
+def verify_token(token):
+    try:
+        payload = jwt.decode(token, app.config['SECRET_KEY'], algorithms=['HS256'])
+        return payload['username']
+    except Exception:
+        return None
+
+@app.route('/register', methods=['POST'])
+def register():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
+    if username in users:
+        return jsonify({'error': 'User already exists'}), 400
+    hashed = bcrypt.generate_password_hash(password).decode('utf-8')
+    users_collection.insert_one({"username": username, "password": hashed})
+    return jsonify({'message': 'User registered successfully'}), 200
+
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    if not username or not password:
+        return jsonify({'error': 'Username and password required'}), 400
+    user = users_collection.find_one({"username": username})
+    if not user or not bcrypt.check_password_hash(user["password"], password):
+        return jsonify({'error': 'Invalid credentials'}), 401
+    token = generate_token(username)
+    return jsonify({'token': token}), 200
+
+# Example protected route
+@app.route('/protected', methods=['GET'])
+def protected():
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    username = verify_token(token)
+    if not username:
+        return jsonify({'error': 'Unauthorized'}), 401
+    return jsonify({'message': f'Hello, {username}!'}), 200
 
 genai.configure(api_key="AIzaSyB8CJIJvb64z3Z_4FKHgmvZXMscx1-yeEs")  # Replace with your Gemini API key
 model = genai.GenerativeModel("gemini-1.5-flash")
