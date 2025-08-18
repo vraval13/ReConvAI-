@@ -2,10 +2,15 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
+import {
+  Loader2,
+  FileAudio,
+  FileText,
+  Download,
+  Upload,
+  Sparkles,
+} from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { FileAudio, FileText, Upload } from "lucide-react";
-import { Download } from "lucide-react";
 import Link from "next/link";
 import {
   Card,
@@ -73,11 +78,9 @@ export default function ComicGeneration() {
       const response = await fetch("http://127.0.0.1:5000/generate-comic", {
         method: "POST",
         body: formData,
-        // Don't set Content-Type header - let the browser set it automatically
       });
 
       if (!response.ok) {
-        // Try to get error message from response
         let errorMessage = "Failed to generate comic";
         try {
           const errorData = await response.json();
@@ -110,39 +113,55 @@ export default function ComicGeneration() {
   };
 
   return (
-    <div className="w-full">
-      <div className="bg-primary text-primary-foreground py-12 md:py-16">
-        <div className="container px-4 md:px-6 mx-auto max-w-5xl">
-          <div className="flex items-center justify-center gap-4 mb-4">
-            <FileText className="h-10 w-10" />
-            <FileAudio className="h-10 w-10" />
+    <div className="w-full min-h-screen bg-gradient-to-b from-purple-50 via-blue-50 to-blue-100 pb-16">
+      {/* HERO / HEADER */}
+      <div className="relative overflow-hidden py-16 md:py-20">
+        <div className="absolute top-0 left-0 w-64 h-64 bg-blue-300/30 blur-3xl rounded-full pointer-events-none -z-10 animate-pulse" />
+        <div className="absolute bottom-0 right-0 w-64 h-64 bg-purple-400/30 blur-3xl rounded-full pointer-events-none -z-10 animate-pulse" />
+        <div className="container px-4 md:px-6 mx-auto max-w-4xl text-center">
+          <div className="flex items-center justify-center gap-6 mb-8">
+            <div className="rounded-full p-4 bg-white/10 shadow-lg animate-fade-in">
+              <FileText className="h-10 w-10 text-blue-500" />
+            </div>
+            <div className="rounded-full p-4 bg-white/10 shadow-lg animate-fade-in">
+              <FileAudio className="h-10 w-10 text-purple-500" />
+            </div>
+            <div className="rounded-full p-4 bg-white/10 shadow-lg animate-fade-in">
+              <Sparkles className="h-10 w-10 text-yellow-400" />
+            </div>
           </div>
-          <h1 className="text-3xl md:text-4xl lg:text-5xl font-bold text-center mb-4">
-            Comic/Story Generation
+          <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold mb-6 text-transparent bg-clip-text bg-gradient-to-r from-blue-600 via-purple-700 to-pink-500 drop-shadow-lg leading-tight">
+            Comic & Story Generation
           </h1>
-          <p className="text-lg md:text-xl text-center max-w-3xl mx-auto">
-            Transform your content into comics with the power of AI. Upload a
-            PDF or enter text, and let our AI do the rest.
+          <p className="text-lg md:text-xl text-gray-700 max-w-2xl mx-auto mb-8">
+            Use <span className="font-semibold text-purple-600">AI</span> to
+            transform your notes, papers, or imagination into delightful comics!{" "}
+            <br />
+            <span className="block mt-2 text-blue-700">
+              Upload a PDF or enter text. Let ResearchHive do the rest.
+            </span>
           </p>
         </div>
       </div>
 
-      <div className="container px-4 md:px-6 mx-auto max-w-5xl mt-8">
+      {/* MAIN CARD SECTION */}
+      <div className="container px-4 md:px-6 mx-auto max-w-3xl mt-8">
         <div className="mb-4">
           <Link href="/">
-            <Button>Back to Home</Button>
+            <Button variant="ghost" className="text-blue-700 hover:bg-blue-100">
+              ← Back to Home
+            </Button>
           </Link>
         </div>
 
-        <Card className="border-2 border-border/50 shadow-md transition-all hover:shadow-lg">
+        <Card className="border-2 border-blue-200 bg-white/80 shadow-xl backdrop-blur-lg transition-all hover:shadow-2xl">
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
-              Input Selection
+            <CardTitle className="flex items-center gap-2 text-purple-700">
+              <Sparkles className="h-5 w-5" />
+              Get Started
             </CardTitle>
             <CardDescription>
-              Choose your input method and provide the content you want to
-              convert to a comic
+              Choose your input and provide content for comic conversion.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -155,7 +174,7 @@ export default function ComicGeneration() {
                 <RadioGroupItem value="pdf" id="pdf" />
                 <Label
                   htmlFor="pdf"
-                  className="flex items-center gap-1.5 cursor-pointer"
+                  className="flex items-center gap-1.5 cursor-pointer text-blue-600"
                 >
                   <Upload className="h-4 w-4" />
                   PDF Upload
@@ -165,7 +184,7 @@ export default function ComicGeneration() {
                 <RadioGroupItem value="text" id="text" />
                 <Label
                   htmlFor="text"
-                  className="flex items-center gap-1.5 cursor-pointer"
+                  className="flex items-center gap-1.5 cursor-pointer text-purple-600"
                 >
                   <FileText className="h-4 w-4" />
                   Text Input
@@ -178,50 +197,67 @@ export default function ComicGeneration() {
                 <FileUploader onFileUpload={handleFileUpload} />
               ) : (
                 <div className="space-y-2">
-                  <Label htmlFor="textInput">Enter your text</Label>
+                  <Label
+                    htmlFor="textInput"
+                    className="font-medium text-blue-600"
+                  >
+                    Enter your text
+                  </Label>
                   <Textarea
                     id="textInput"
-                    placeholder="Enter the text you want to convert to a comic here. For best results, provide detailed and well-structured content."
-                    className="min-h-[200px] resize-y"
+                    placeholder="Describe your story, concept, or research to inspire a comic."
+                    className="min-h-[200px] resize-y bg-blue-50 border-blue-200 rounded-xl text-gray-800"
                     value={content}
                     onChange={handleTextInputChange}
                   />
+                  <div className="text-xs text-gray-500 mt-1">
+                    Pro tip: Provide rich detail for best comic results!
+                  </div>
                 </div>
               )}
             </div>
 
             <Button
-              className="w-full md:w-auto"
+              className="w-full md:w-auto bg-purple-600 hover:bg-purple-700 text-white text-lg py-3 mt-2 transition-all rounded-xl shadow-lg flex items-center justify-center"
               onClick={handleGenerateComic}
               disabled={isLoading}
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                   Generating Comic...
                 </>
               ) : (
-                "Generate Comic"
+                <>
+                  <Sparkles className="mr-2 h-4 w-4" />
+                  Generate Comic
+                </>
               )}
             </Button>
           </CardContent>
         </Card>
 
         {comicImage && (
-          <Card className="mt-8 border-2 border-border/50 shadow-md">
+          <Card className="mt-10 border-2 border-purple-200 bg-white/90 shadow-xl animate-fade-in">
             <CardHeader>
-              <CardTitle>Generated Comic</CardTitle>
+              <CardTitle className="text-purple-700 flex items-center gap-2">
+                <Sparkles className="h-5 w-5" />
+                Your Generated Comic
+              </CardTitle>
             </CardHeader>
             <CardContent>
               <img
                 src={comicImage}
                 alt="Generated Comic"
-                className="w-full rounded-lg border"
+                className="w-full rounded-xl border-2 border-purple-200 shadow-lg"
               />
-              <div className="mt-4 flex justify-center">
+              <div className="mt-6 flex justify-center">
                 <a href={comicImage} download="comic.png">
-                  <Button variant="outline">
-                    <Download className="mr-2 h-4 w-4" />
+                  <Button
+                    variant="outline"
+                    className="text-purple-600 border-purple-400 hover:bg-purple-50 flex items-center gap-2"
+                  >
+                    <Download className="mr-1 h-4 w-4" />
                     Download Comic
                   </Button>
                 </a>

@@ -5,11 +5,19 @@ import { InputSection } from "./input-section";
 import { OptionsSection } from "./options-section";
 import { ResultsSection } from "./results-section";
 import { Button } from "./ui/button";
-import { Loader2 } from "lucide-react";
+import {
+  Loader2,
+  LogOut,
+  Sparkles,
+  Layers,
+  BookOpen,
+  HelpCircle,
+} from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 
+// Types
 export type InputType = "pdf" | "text";
 export type SummaryLevel = "beginner" | "student" | "expert";
 export type PodcastTone = "formal" | "balanced" | "creative";
@@ -35,19 +43,20 @@ export interface GeneratedContent {
   podcastScript: string;
   podcastAudioUrl: string;
   powerpointUrl: string;
-  videoUrl?: string; // Optional field for video URL
+  videoUrl?: string;
 }
 
 export function MainConverter() {
   const { logout } = useAuth();
-  // const router = useRouter();
+  const router = useRouter();
+  const { toast } = useToast();
 
   const handleLogout = () => {
     logout();
     router.push("/landing");
   };
 
-  const { toast } = useToast();
+  // State
   const [formData, setFormData] = useState<FormData>({
     inputType: "text",
     pdfFile: null,
@@ -64,10 +73,9 @@ export function MainConverter() {
     useState<GeneratedContent | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const router = useRouter();
-  // Add these functions inside the MainConverter component
-
-  // ...existing code...
+  // ---------------------------
+  // 🚀 Download Handlers
+  // ---------------------------
   const handleDownloadVideo = async () => {
     try {
       const response = await fetch("http://127.0.0.1:5000/generate-video", {
@@ -86,7 +94,6 @@ export function MainConverter() {
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
 
-      // Create a link element to trigger the download
       const link = document.createElement("a");
       link.href = url;
       link.download = "summary_video.mp4";
@@ -102,7 +109,7 @@ export function MainConverter() {
       });
     }
   };
-  // ...existing code...
+
   const handleDownloadAudio = async () => {
     try {
       const response = await fetch("http://127.0.0.1:5000/generate-audio", {
@@ -114,20 +121,18 @@ export function MainConverter() {
       });
 
       if (!response.ok) {
-        const errorText = await response.text(); // Use text() to read error messages
+        const errorText = await response.text();
         throw new Error(errorText || "Failed to generate audio");
       }
 
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
 
-      // Create a link element to trigger the download
       const link = document.createElement("a");
       link.href = url;
       link.download = "podcast-audio.wav";
       link.click();
 
-      // Clean up the URL object
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Error downloading audio:", error);
@@ -156,20 +161,18 @@ export function MainConverter() {
       });
 
       if (!response.ok) {
-        const errorText = await response.text(); // Use text() to read error messages
+        const errorText = await response.text();
         throw new Error(errorText || "Failed to generate PowerPoint");
       }
 
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
 
-      // Create a link element to trigger the download
       const link = document.createElement("a");
       link.href = url;
       link.download = "presentation.pptx";
       link.click();
 
-      // Clean up the URL object
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Error downloading PowerPoint:", error);
@@ -181,8 +184,10 @@ export function MainConverter() {
     }
   };
 
+  // ---------------------------
+  // 🚀 Handle Submit
+  // ---------------------------
   const handleSubmit = async () => {
-    // Validate form data
     if (formData.inputType === "pdf" && !formData.pdfFile) {
       toast({
         title: "Please upload a PDF file",
@@ -202,14 +207,12 @@ export function MainConverter() {
     setIsLoading(true);
 
     try {
-      // Map summaryLevel to match backend expectations
       const summaryLevelMap = {
         beginner: "Beginner",
         student: "Student",
         expert: "Expert",
       };
 
-      // Step 1: Get the input text (either from PDF or text input)
       let inputText = formData.textInput;
 
       if (formData.inputType === "pdf" && formData.pdfFile) {
@@ -226,18 +229,18 @@ export function MainConverter() {
         }
 
         const uploadData = await uploadResponse.json();
-        inputText = uploadData.content; // Use 'content' as returned by the backend
+        inputText = uploadData.content;
       }
 
-      // Step 2: Generate summary
+      // Generate summary
       const summaryResponse = await fetch(
         "http://127.0.0.1:5000/generate-summary",
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            text: inputText, // Match the backend's expected key
-            summary_level: summaryLevelMap[formData.summaryLevel], // Map to correct case
+            text: inputText,
+            summary_level: summaryLevelMap[formData.summaryLevel],
           }),
           mode: "cors",
         }
@@ -250,18 +253,7 @@ export function MainConverter() {
 
       const { summary, summary_text } = await summaryResponse.json();
 
-      const creativityLevelMap = {
-        formal: "Formal",
-        balanced: "Balanced",
-        creative: "Creative",
-      };
-
-      const podcastLengthMap = {
-        short: "Short (2-3 mins)",
-        medium: "Medium (5-7 mins)",
-        long: "Long (10+ mins)",
-      };
-      // Step 3: Generate podcast script
+      // Generate podcast script
       const podcastResponse = await fetch(
         "http://127.0.0.1:5000/generate-podcast",
         {
@@ -278,7 +270,6 @@ export function MainConverter() {
 
       if (!podcastResponse.ok) {
         const errorData = await podcastResponse.json();
-        console.error("Backend error details:", errorData);
         throw new Error(errorData.error || "Failed to generate podcast");
       }
 
@@ -290,7 +281,7 @@ export function MainConverter() {
         template3: "Template 3",
       };
 
-      // Step 4: Generate PowerPoint
+      // Generate ppt
       const pptResponse = await fetch("http://127.0.0.1:5000/generate-ppt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -303,14 +294,13 @@ export function MainConverter() {
 
       if (!pptResponse.ok) {
         const errorData = await pptResponse.json();
-        console.error("Backend error details:", errorData);
         throw new Error(errorData.error || "Failed to generate PowerPoint");
       }
 
-      // const { pptx_file: powerpointUrl } = await pptResponse.json();
       const blob = await pptResponse.blob();
       const powerpointUrl = URL.createObjectURL(blob);
-      // Step 5: Generate podcast audio
+
+      // Generate audio
       const audioResponse = await fetch(
         "http://127.0.0.1:5000/generate-audio",
         {
@@ -325,15 +315,13 @@ export function MainConverter() {
 
       if (!audioResponse.ok) {
         const errorData = await audioResponse.json().catch(() => ({}));
-        console.error("Audio generation error:", errorData);
         throw new Error(errorData.error || "Failed to generate audio");
       }
 
       const audioBlob = await audioResponse.blob();
       const podcastAudioUrl = URL.createObjectURL(audioBlob);
 
-      // const { audio_url: podcastAudioUrl } = await audioResponse.json();
-      // Step 6: Generate video (optional)
+      // Generate video (optional)
       let videoUrl: string | undefined = undefined;
       try {
         const videoResponse = await fetch(
@@ -352,14 +340,12 @@ export function MainConverter() {
           const videoBlob = await videoResponse.blob();
           videoUrl = URL.createObjectURL(videoBlob);
         } else {
-          console.warn("Video generation failed: Server returned an error");
-          const errorData = await videoResponse.json().catch(() => ({}));
-          console.error("Video error details:", errorData);
+          console.warn("Video generation failed");
         }
       } catch (e) {
         console.warn("Video generation failed", e);
       }
-      // Update state with all generated content
+
       setGeneratedContent({
         summary,
         podcastScript,
@@ -383,53 +369,66 @@ export function MainConverter() {
       setIsLoading(false);
     }
   };
+
+  // ---------------------------
+  // 🚀 UI Rendering
+  // ---------------------------
   return (
-    <div className="space-y-8 animate-fade-in">
-      <div className="flex justify-between items-center">
-        {/* <h1 className="text-3xl font-bold">ResearchHive Converter</h1> */}
+    <div className="min-h-screen bg-gradient-to-b from-blue-50 to-blue-100 px-6 py-10 animate-fade-in">
+      {/* Header */}
+      <header className="flex justify-between items-center mb-10">
+        <h1 className="text-3xl md:text-4xl font-extrabold text-blue-700 tracking-tight">
+          ResearchHive Converter 🐝
+        </h1>
         <Button
           onClick={handleLogout}
-          className="bg-red-500 hover:bg-red-600 text-white"
+          className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white"
         >
+          <LogOut className="h-4 w-4" />
           Logout
         </Button>
-      </div>
-      <div>
-        <Link
-          href={"/comic-generation"}
-          className="text-blue-500 hover:underline"
-          passHref
-        >
-          <Button className="w-full md:w-auto px-8 py-6 text-lg transition-all">
-            Try Comic Generation!
-          </Button>
-        </Link>
-      </div>
-      <div>
-        <Link
-          href="mcq-generation"
-          className="text-blue-500 hover:underline"
-          passHref
-        >
-          <Button className="w-full md:w-auto px-8 py-6 text-lg transition-all">
-            Try MCQ Generation!
-          </Button>
-        </Link>
-      </div>
-      <div>
-        <Link href="rag-qa" className="text-blue-500 hover:underline" passHref>
-          <Button className="w-full md:w-auto px-8 py-6 text-lg transition-all">
-            Try RAG Q&A!
-          </Button>
-        </Link>
-      </div>
-      <InputSection formData={formData} setFormData={setFormData} />
-      <OptionsSection formData={formData} setFormData={setFormData} />
+      </header>
 
-      <div className="flex justify-center pt-4">
+      {/* Quick Links */}
+      <section className="grid sm:grid-cols-3 gap-4 mb-8">
+        <Link href={"/comic-generation"} passHref>
+          <Button className="w-full h-20 flex items-center justify-center gap-2 text-lg shadow hover:shadow-lg">
+            <Sparkles className="h-5 w-5" /> Comic Generation
+          </Button>
+        </Link>
+        <Link href="/mcq-generation" passHref>
+          <Button className="w-full h-20 flex items-center justify-center gap-2 text-lg shadow hover:shadow-lg">
+            <HelpCircle className="h-5 w-5" /> MCQ Generator
+          </Button>
+        </Link>
+        <Link href="/rag-qa" passHref>
+          <Button className="w-full h-20 flex items-center justify-center gap-2 text-lg shadow hover:shadow-lg">
+            <BookOpen className="h-5 w-5" /> RAG Q&A
+          </Button>
+        </Link>
+      </section>
+
+      {/* Input Section */}
+      <section className="bg-white rounded-xl shadow-lg p-6 mb-6 border border-gray-100">
+        <h2 className="text-xl font-semibold text-blue-700 mb-4 flex items-center gap-2">
+          <Layers className="h-5 w-5 text-blue-500" /> Input Your Research
+        </h2>
+        <InputSection formData={formData} setFormData={setFormData} />
+      </section>
+
+      {/* Options Section */}
+      <section className="bg-white rounded-xl shadow-lg p-6 mb-6 border border-gray-100">
+        <h2 className="text-xl font-semibold text-blue-700 mb-4 flex items-center gap-2">
+          <Sparkles className="h-5 w-5 text-blue-500" /> Customize Your Output
+        </h2>
+        <OptionsSection formData={formData} setFormData={setFormData} />
+      </section>
+
+      {/* Generate Button */}
+      <div className="flex justify-center mb-8">
         <Button
           onClick={handleSubmit}
-          className="w-full md:w-auto px-8 py-6 text-lg transition-all"
+          className="px-10 py-6 text-lg rounded-xl bg-blue-700 hover:bg-blue-800 flex items-center gap-2 shadow-md hover:shadow-lg transition-all"
           disabled={isLoading}
         >
           {isLoading ? (
@@ -443,13 +442,19 @@ export function MainConverter() {
         </Button>
       </div>
 
+      {/* Results */}
       {generatedContent && (
-        <ResultsSection
-          generatedContent={generatedContent}
-          onDownloadAudio={handleDownloadAudio}
-          onDownloadPowerPoint={handleDownloadPowerPoint}
-          onDownloadVideo={handleDownloadVideo}
-        />
+        <section className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+          <h2 className="text-xl font-semibold text-blue-700 mb-4">
+            Your Results 🎉
+          </h2>
+          <ResultsSection
+            generatedContent={generatedContent}
+            onDownloadAudio={handleDownloadAudio}
+            onDownloadPowerPoint={handleDownloadPowerPoint}
+            onDownloadVideo={handleDownloadVideo}
+          />
+        </section>
       )}
     </div>
   );
