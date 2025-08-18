@@ -8,6 +8,8 @@ import { Button } from "./ui/button";
 import { Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/context/AuthContext";
+
 export type InputType = "pdf" | "text";
 export type SummaryLevel = "beginner" | "student" | "expert";
 export type PodcastTone = "formal" | "balanced" | "creative";
@@ -37,6 +39,14 @@ export interface GeneratedContent {
 }
 
 export function MainConverter() {
+  const { logout } = useAuth();
+  // const router = useRouter();
+
+  const handleLogout = () => {
+    logout();
+    router.push("/landing");
+  };
+
   const { toast } = useToast();
   const [formData, setFormData] = useState<FormData>({
     inputType: "text",
@@ -375,6 +385,15 @@ export function MainConverter() {
   };
   return (
     <div className="space-y-8 animate-fade-in">
+      <div className="flex justify-between items-center">
+        {/* <h1 className="text-3xl font-bold">ResearchHive Converter</h1> */}
+        <Button
+          onClick={handleLogout}
+          className="bg-red-500 hover:bg-red-600 text-white"
+        >
+          Logout
+        </Button>
+      </div>
       <div>
         <Link
           href={"/comic-generation"}
@@ -398,11 +417,7 @@ export function MainConverter() {
         </Link>
       </div>
       <div>
-        <Link
-          href="rag-qa"
-          className="text-blue-500 hover:underline"
-          passHref
-        >
+        <Link href="rag-qa" className="text-blue-500 hover:underline" passHref>
           <Button className="w-full md:w-auto px-8 py-6 text-lg transition-all">
             Try RAG Q&A!
           </Button>
