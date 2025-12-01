@@ -8,5 +8,4 @@ streamlit
 torch
 diffusers
 transformers
-math
 gradio_client
