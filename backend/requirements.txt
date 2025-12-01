@@ -9,3 +9,4 @@ torch
 diffusers
 transformers
 gradio_client
+flask-bcrypt
