@@ -25,8 +25,18 @@ from flask_bcrypt import Bcrypt
 import jwt
 import datetime
 
+## For Reddis Caching
+import redis
+import hashlib
+import pickle
+
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}, supports_credentials=True)
+
+redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=False)
+
+def redis_key_for_text(text):
+    return "embed:" + hashlib.sha256(text.encode('utf-8')).hexdigest()
 
 bcrypt = Bcrypt(app)
 app.config['SECRET_KEY'] = 'abc@123'  # Change this!
@@ -34,7 +44,7 @@ app.config['SECRET_KEY'] = 'abc@123'  # Change this!
 # In-memory user store (replace with DB in production)
 from pymongo import MongoClient
 import os
-MONGO_URI ="mongodb+srv://ravalvyom17:8yShml4FgDywDCwX@cluster0.8gyywis.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+MONGO_URI =os.getenv("MONGO_URI","mongodb://localhost:27017")
 
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["researchhive"]
@@ -90,8 +100,8 @@ def protected():
         return jsonify({'error': 'Unauthorized'}), 401
     return jsonify({'message': f'Hello, {username}!'}), 200
 
-genai.configure(api_key="AIzaSyB8CJIJvb64z3Z_4FKHgmvZXMscx1-yeEs")  # Replace with your Gemini API key
-model = genai.GenerativeModel("gemini-1.5-flash")
+genai.configure(api_key="AIzaSyB3aKZrfQZmfISU-nay6reeFp_At1BgE50")  # Replace with your Gemini API key
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 level_prompts = {
     "Beginner": "Summarize this research paper section for a high school student in 4-6 concise bullet points:",
@@ -133,32 +143,51 @@ def chunk_text(text, chunk_size=300, overlap=50):
 
 embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
 
-def build_faiss_index(chunks):
-    """Create a FAISS index from text chunks."""
-    embeddings = embedding_model.encode(chunks)
+def build_faiss_index_with_cache(chunks):
+    """Create a FAISS index from text chunks, caching embeddings in Redis."""
+    embeddings = []
+    for chunk in chunks:
+        key = redis_key_for_text(chunk)
+        cached = redis_client.get(key)
+        if cached:
+            emb = pickle.loads(cached)
+        else:
+            emb = embedding_model.encode([chunk])[0]
+            redis_client.set(key, pickle.dumps(emb))
+        embeddings.append(emb)
+    embeddings = np.stack(embeddings)
     index = faiss.IndexFlatL2(embeddings.shape[1])
-    index.add(np.array(embeddings).astype('float32'))
+    index.add(embeddings.astype('float32'))
     return index, embeddings, chunks
 
-def retrieve_relevant_chunks(query, index, embeddings, chunks, top_k=3):
-    """Retrieve top-k relevant chunks for a query."""
-    query_emb = embedding_model.encode([query]).astype('float32')
+def retrieve_relevant_chunks_with_cache(query, index, embeddings, chunks, top_k=3):
+    """Retrieve top-k relevant chunks for a query, caching query embedding in Redis."""
+    key = redis_key_for_text(query)
+    cached = redis_client.get(key)
+    if cached:
+        query_emb = pickle.loads(cached)
+    else:
+        query_emb = embedding_model.encode([query])[0]
+        redis_client.set(key, pickle.dumps(query_emb))
+    query_emb = np.array(query_emb).reshape(1, -1).astype('float32')
     D, I = index.search(query_emb, top_k)
     return [chunks[i] for i in I[0]]
 
 def rag_generate_answer(query, document_text):
-    # Step 1: Chunk the document
+    
     chunks = chunk_text(document_text)
-    # Step 2: Build index
-    index, embeddings, chunk_list = build_faiss_index(chunks)
-    # Step 3: Retrieve relevant chunks
-    retrieved_chunks = retrieve_relevant_chunks(query, index, embeddings, chunk_list, top_k=3)
-    # Step 4: Compose context for LLM
+    
+    index, embeddings, chunk_list = build_faiss_index_with_cache(chunks)
+    
+    retrieved_chunks = retrieve_relevant_chunks_with_cache(query, index, embeddings, chunk_list, top_k=3)
+    
     context = "\n".join(retrieved_chunks)
     prompt = f"""Use the following context to answer the question:\n\nContext:\n{context}\n\nQuestion: {query}\nAnswer:"""
-    # Step 5: Call your LLM (Gemini or local)
+    
     response = model.generate_content(prompt)
     return response.text
+
+import time 
 
 @app.route('/rag-answer', methods=['POST'])
 def rag_answer():
@@ -168,7 +197,25 @@ def rag_answer():
         query = data.get('query')
         if not document_text or not query:
             return jsonify({'error': 'document_text and query are required'}), 400
-        answer = rag_generate_answer(query, document_text)
+        
+        start_total = time.time()
+        # --- FAISS timing ---
+        start_faiss = time.time()
+        chunks = chunk_text(document_text)
+        index, embeddings, chunk_list = build_faiss_index_with_cache(chunks)
+        retrieved_chunks = retrieve_relevant_chunks_with_cache(query, index, embeddings, chunk_list, top_k=3)
+        end_faiss = time.time()
+        print(f"FAISS indexing and search took {end_faiss - start_faiss:.2f} seconds")
+        # --- RAG pipeline ---
+        context = "\n".join(retrieved_chunks)
+        prompt = f"""Use the following context to answer the question:\n\nContext:\n{context}\n\nQuestion: {query}\nAnswer:"""
+        answer_start = time.time()
+        response = model.generate_content(prompt)
+        answer = response.text
+        answer_end = time.time()
+        print(f"RAG pipeline answer: {answer}")
+        print(f"RAG answer generation took {answer_end - answer_start:.2f} seconds")
+        print(f"Total RAG QA pipeline took {time.time() - start_total:.2f} seconds")
         return jsonify({'answer': answer}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -911,7 +958,6 @@ def handle_upload_pdf():
         
         try:
             file.save(temp_pdf_path)
-            
             if not os.path.exists(temp_pdf_path):
                 return jsonify({'error': 'Failed to save uploaded file'}), 500
 
@@ -924,14 +970,12 @@ def handle_upload_pdf():
                 'content': pdf_text,
                 'filename': file.filename
             }), 200
-            
         finally:
             if os.path.exists(temp_pdf_path):
                 try:
                     os.remove(temp_pdf_path)
                 except:
                     pass
-                
     except Exception as e:
         return jsonify({
             'error': f'Internal server error: {str(e)}',
@@ -1693,6 +1737,183 @@ def create_placeholder_background(setting, width, height):
     return background
 
 ## a bit good approach for video
+import os
+import re
+import tempfile
+import traceback
+import subprocess
+import random
+import math
+from flask import request, jsonify, send_file
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+import textwrap
+
+class AvatarAnimator:
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+        self.avatar_size = 120
+        self.avatar_colors = [
+            (255, 192, 203),  # Pink
+            (135, 206, 235),  # Sky Blue
+            (255, 165, 0),    # Orange
+            (144, 238, 144),  # Light Green
+            (221, 160, 221),  # Plum
+            (255, 215, 0),    # Gold
+        ]
+        
+    def create_avatar(self, color, expression="happy", frame=0):
+        """Create an animated avatar with different expressions"""
+        avatar = Image.new('RGBA', (self.avatar_size, self.avatar_size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(avatar)
+        
+        # Body (circle)
+        body_offset = int(5 * math.sin(frame * 0.1))  # Gentle floating animation
+        draw.ellipse([10, 20 + body_offset, self.avatar_size-10, self.avatar_size-20 + body_offset], 
+                    fill=color, outline=(0, 0, 0, 100), width=2)
+        
+        # Eyes
+        eye_y = 40 + body_offset
+        if expression == "happy":
+            # Happy eyes (crescents)
+            draw.arc([25, eye_y, 40, eye_y+15], 0, 180, fill=(0, 0, 0), width=3)
+            draw.arc([70, eye_y, 85, eye_y+15], 0, 180, fill=(0, 0, 0), width=3)
+        elif expression == "excited":
+            # Wide open eyes
+            draw.ellipse([25, eye_y, 40, eye_y+15], fill=(255, 255, 255), outline=(0, 0, 0), width=2)
+            draw.ellipse([70, eye_y, 85, eye_y+15], fill=(255, 255, 255), outline=(0, 0, 0), width=2)
+            draw.ellipse([30, eye_y+3, 35, eye_y+12], fill=(0, 0, 0))
+            draw.ellipse([75, eye_y+3, 80, eye_y+12], fill=(0, 0, 0))
+        else:  # normal
+            draw.ellipse([25, eye_y, 40, eye_y+15], fill=(255, 255, 255), outline=(0, 0, 0), width=2)
+            draw.ellipse([70, eye_y, 85, eye_y+15], fill=(255, 255, 255), outline=(0, 0, 0), width=2)
+            draw.ellipse([28, eye_y+5, 37, eye_y+10], fill=(0, 0, 0))
+            draw.ellipse([73, eye_y+5, 82, eye_y+10], fill=(0, 0, 0))
+        
+        # Mouth
+        mouth_y = 70 + body_offset
+        if expression == "happy" or expression == "excited":
+            # Smile
+            draw.arc([40, mouth_y, 70, mouth_y+20], 0, 180, fill=(0, 0, 0), width=3)
+        else:
+            # Neutral mouth
+            draw.ellipse([50, mouth_y+5, 60, mouth_y+10], fill=(0, 0, 0))
+        
+        # Arms (animated waving)
+        arm_angle = 20 * math.sin(frame * 0.2)
+        left_arm_x = 15 + int(10 * math.sin(math.radians(arm_angle)))
+        right_arm_x = 95 - int(10 * math.sin(math.radians(arm_angle)))
+        
+        draw.ellipse([left_arm_x, 35 + body_offset, left_arm_x+15, 50 + body_offset], 
+                    fill=color, outline=(0, 0, 0), width=1)
+        draw.ellipse([right_arm_x, 35 + body_offset, right_arm_x+15, 50 + body_offset], 
+                    fill=color, outline=(0, 0, 0), width=1)
+        
+        return avatar
+    
+    def create_speech_bubble(self, text, position, frame=0):
+        """Create an animated speech bubble"""
+        # Wrap text
+        wrapper = textwrap.TextWrapper(width=20)
+        lines = wrapper.wrap(text)[:3]  # Max 3 lines
+        
+        # Calculate bubble size
+        bubble_width = max(200, max(len(line) * 8 for line in lines) + 40)
+        bubble_height = len(lines) * 25 + 30
+        
+        # Create bubble with animation (slight scaling)
+        scale = 1 + 0.05 * math.sin(frame * 0.15)
+        scaled_width = int(bubble_width * scale)
+        scaled_height = int(bubble_height * scale)
+        
+        bubble = Image.new('RGBA', (scaled_width + 30, scaled_height + 30), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(bubble)
+        
+        # Bubble background
+        draw.rounded_rectangle([15, 5, scaled_width, scaled_height], 
+                             radius=15, fill=(255, 255, 255, 240), 
+                             outline=(0, 0, 0, 180), width=2)
+        
+        # Bubble tail
+        draw.polygon([(30, scaled_height), (45, scaled_height), (35, scaled_height + 15)], 
+                    fill=(255, 255, 255, 240), outline=(0, 0, 0, 180))
+        
+        # Text
+        try:
+            font = ImageFont.truetype("arial.ttf", 16)
+        except IOError:
+            font = ImageFont.load_default()
+        
+        y_offset = 15
+        for line in lines:
+            text_width = draw.textlength(line, font=font) if hasattr(draw, 'textlength') else len(line) * 8
+            x_offset = (scaled_width - text_width) // 2 + 15
+            draw.text((x_offset, y_offset), line, fill=(0, 0, 0), font=font)
+            y_offset += 25
+        
+        return bubble
+
+class EnhancedVideoGenerator:
+    def __init__(self):
+        self.animator = None
+        
+    def analyze_content_mood(self, text):
+        """Analyze the content to determine the appropriate mood and style"""
+        excitement_words = ['amazing', 'incredible', 'awesome', 'fantastic', 'exciting', 'wow', 'great']
+        educational_words = ['learn', 'understand', 'study', 'knowledge', 'science', 'research']
+        funny_words = ['funny', 'hilarious', 'joke', 'laugh', 'humor', 'comedy']
+        
+        text_lower = text.lower()
+        
+        if any(word in text_lower for word in excitement_words):
+            return 'excited'
+        elif any(word in text_lower for word in funny_words):
+            return 'funny'
+        elif any(word in text_lower for word in educational_words):
+            return 'educational'
+        else:
+            return 'normal'
+    
+    def add_background_elements(self, img, style, frame):
+        """Add animated background elements"""
+        draw = ImageDraw.Draw(img)
+        width, height = img.size
+        
+        if style == 'modern':
+            # Floating geometric shapes
+            for i in range(5):
+                x = (width // 6) * i + int(20 * math.sin(frame * 0.05 + i))
+                y = height - 100 + int(15 * math.cos(frame * 0.08 + i))
+                size = 20 + int(10 * math.sin(frame * 0.1 + i))
+                
+                # Create semi-transparent overlay
+                overlay = Image.new('RGBA', img.size, (0, 0, 0, 0))
+                overlay_draw = ImageDraw.Draw(overlay)
+                
+                if i % 2 == 0:
+                    # Circles
+                    overlay_draw.ellipse([x, y, x+size, y+size], 
+                                       fill=(255, 255, 255, 50))
+                else:
+                    # Squares
+                    overlay_draw.rectangle([x, y, x+size, y+size], 
+                                         fill=(200, 200, 255, 60))
+                
+                img = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+        
+        return img
+    
+    def create_transition_effect(self, img1, img2, progress):
+        """Create smooth transitions between slides"""
+        # Simple fade transition
+        alpha = int(255 * progress)
+        img2_faded = img2.copy()
+        img2_faded.putalpha(alpha)
+        
+        result = img1.copy().convert('RGBA')
+        result = Image.alpha_composite(result, img2_faded.convert('RGBA'))
+        return result.convert('RGB')
+
 @app.route('/generate-video', methods=['POST'])
 def generate_video():
     try:
@@ -1707,6 +1928,9 @@ def generate_video():
         video_style = data.get('video_style', 'modern')
         resolution = data.get('resolution', '720p')
         
+        # Create enhanced video generator
+        generator = EnhancedVideoGenerator()
+        
         # Create a temporary directory for the video generation
         temp_dir = tempfile.mkdtemp()
         frames_dir = os.path.join(temp_dir, "frames")
@@ -1714,20 +1938,77 @@ def generate_video():
         output_path = os.path.join(temp_dir, "summary_video.mp4")
         
         try:
-            # Create slides from the summary text
+            # Set resolution
+            if resolution == '720p':
+                width, height = 1280, 720
+            elif resolution == '1080p':
+                width, height = 1920, 1080
+            else:
+                width, height = 1280, 720  # Default
+            
+            generator.animator = AvatarAnimator(width, height)
+            
+            # Enhanced key point extraction function
+            def extract_key_points(text, max_points=5):
+                """Extract key points from text using multiple methods"""
+                sentences = re.split(r'[.!?]+', text)
+                sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+                
+                key_points = []
+                
+                # Method 1: Look for sentences with keywords
+                priority_words = ['important', 'key', 'main', 'crucial', 'significant', 
+                                'result', 'conclusion', 'because', 'therefore', 'however']
+                
+                for sentence in sentences:
+                    if any(word in sentence.lower() for word in priority_words):
+                        key_points.append(sentence.strip())
+                
+                # Method 2: Look for numbered/bulleted points
+                bullet_patterns = [r'^\d+\.', r'^[•\-\*]', r'^[a-z]\)', r'^\([a-z]\)']
+                for sentence in sentences:
+                    if any(re.match(pattern, sentence.strip()) for pattern in bullet_patterns):
+                        key_points.append(re.sub(r'^[\d\.\-\*•\(\)a-z]+\s*', '', sentence.strip()))
+                
+                # Method 3: Extract sentences with specific structures
+                for sentence in sentences:
+                    if (len(sentence.split()) >= 5 and len(sentence.split()) <= 25 and
+                        ('is' in sentence or 'are' in sentence or 'can' in sentence or 'will' in sentence)):
+                        key_points.append(sentence.strip())
+                
+                # Remove duplicates and filter
+                unique_points = []
+                for point in key_points:
+                    if point not in unique_points and len(point) > 20:
+                        unique_points.append(point)
+                
+                # If we don't have enough points, add the longest sentences
+                if len(unique_points) < max_points:
+                    remaining_sentences = [s for s in sentences if s not in unique_points]
+                    remaining_sentences.sort(key=len, reverse=True)
+                    for sentence in remaining_sentences[:max_points - len(unique_points)]:
+                        if len(sentence) > 30:
+                            unique_points.append(sentence)
+                
+                return unique_points[:max_points]
+            
+            # Parse content into slides with key points
             slides = []
             sections = re.split(r'\n\s*##\s+', summary_text)
             
-            # Process first section (might not have a title)
+            # Process sections and extract key points
             if not sections[0].strip().startswith('# '):
-                # If first section doesn't start with a heading
                 intro_text = sections[0].strip()
                 if intro_text:
+                    intro_points = extract_key_points(intro_text, 3)
                     slides.append({
-                        'title': 'Introduction',
-                        'content': intro_text
+                        'title': '🎬 Welcome to Our Story!',
+                        'key_points': intro_points,
+                        'mood': generator.analyze_content_mood(intro_text),
+                        'avatar_count': 2,
+                        'animation_style': 'fade_in'
                     })
-                sections = sections[1:]  # Remove the first section
+                sections = sections[1:]
             
             # Process remaining sections
             for section in sections:
@@ -1737,114 +2018,420 @@ def generate_video():
                     
                 title = lines[0].strip()
                 content = '\n'.join(lines[1:]).strip()
+                full_content = content + ' ' + title
+                
+                key_points = extract_key_points(full_content, 4)
+                animation_styles = ['slide_in', 'bounce_in', 'zoom_in', 'flip_in', 'typewriter']
                 
                 slides.append({
                     'title': title,
-                    'content': content
+                    'key_points': key_points,
+                    'mood': generator.analyze_content_mood(full_content),
+                    'avatar_count': random.randint(2, 3),
+                    'animation_style': random.choice(animation_styles)
                 })
             
-            # Generate frames using PIL instead of MoviePy
-            from PIL import Image, ImageDraw, ImageFont
-            import textwrap
-            
-            # Set resolution
-            if resolution == '720p':
-                width, height = 1280, 720
-            elif resolution == '1080p':
-                width, height = 1920, 1080
-            else:
-                width, height = 1280, 720  # Default
-            
-            # Try to load fonts, fallback to default if not available
+            # Try to load fonts
             try:
-                title_font = ImageFont.truetype("arial.ttf", 60)
-                content_font = ImageFont.truetype("arial.ttf", 30)
+                title_font = ImageFont.truetype("arial.ttf", 48)
+                content_font = ImageFont.truetype("arial.ttf", 24)
+                point_font = ImageFont.truetype("arial.ttf", 20)
+                small_font = ImageFont.truetype("arial.ttf", 16)
             except IOError:
-                # Fallback to default font
                 title_font = ImageFont.load_default()
                 content_font = ImageFont.load_default()
+                point_font = ImageFont.load_default()
+                small_font = ImageFont.load_default()
             
-            # Define styles
+            # Define enhanced styles
             if video_style == 'modern':
-                bg_color = (25, 25, 112)  # Dark blue
-                title_color = (255, 255, 255)  # White
-                content_bg = (240, 240, 240)  # Light gray
-                content_color = (0, 0, 0)  # Black
-            else:  # Default style
-                bg_color = (0, 0, 128)  # Navy
-                title_color = (255, 255, 255)  # White
-                content_bg = (255, 255, 255)  # White
-                content_color = (0, 0, 0)  # Black
+                bg_gradient_start = (45, 45, 85)
+                bg_gradient_end = (25, 25, 55)
+                title_color = (255, 255, 255)
+                point_colors = [(255, 215, 0), (255, 105, 180), (0, 255, 127), (255, 69, 0), (138, 43, 226)]
+                content_bg = (240, 245, 255, 200)
+            else:
+                bg_gradient_start = (20, 50, 100)
+                bg_gradient_end = (0, 20, 60)
+                title_color = (255, 255, 255)
+                point_colors = [(255, 255, 0), (255, 165, 0), (0, 255, 255), (255, 20, 147), (124, 252, 0)]
+                content_bg = (255, 255, 255, 220)
             
-            # Create title slide
-            title_img = Image.new('RGB', (width, height), bg_color)
-            draw = ImageDraw.Draw(title_img)
+            frame_count = 0
             
-            main_title = "Video-Generated Summary"
-            title_w, title_h = draw.textsize(main_title, font=title_font) if hasattr(draw, 'textsize') else (width//2, 60)
-            draw.text(((width-title_w)//2, height//2 - title_h//2), main_title, fill=title_color, font=title_font)
+            # Animation helper functions
+            def apply_animation(text, animation_style, progress, max_chars):
+                """Apply different animation styles to text appearance"""
+                if animation_style == 'typewriter':
+                    return text[:int(progress * len(text))]
+                elif animation_style == 'fade_in':
+                    if progress > 0.3:
+                        return text
+                    else:
+                        return ""
+                elif animation_style == 'slide_in':
+                    if progress > 0.2:
+                        return text
+                    else:
+                        return ""
+                elif animation_style == 'bounce_in':
+                    if progress > 0.4:
+                        return text
+                    else:
+                        return ""
+                elif animation_style == 'zoom_in':
+                    if progress > 0.3:
+                        return text
+                    else:
+                        return ""
+                elif animation_style == 'flip_in':
+                    if progress > 0.5:
+                        return text
+                    else:
+                        return ""
+                return text
             
-            # Save frames for each second (assuming 24fps)
-            for i in range(24 * 3):  # 3 seconds for title
-                title_img.save(os.path.join(frames_dir, f"frame_{i:05d}.jpg"), quality=95)
+            def get_point_position(point_idx, total_points, frame, width, height, animation_style):
+                """Calculate animated positions for key points"""
+                base_y = 180 + point_idx * 120
+                base_x = 100
+                
+                if animation_style == 'slide_in':
+                    offset_x = int(50 * math.cos(frame * 0.02 + point_idx))
+                    return (base_x + offset_x, base_y)
+                elif animation_style == 'bounce_in':
+                    bounce = int(10 * abs(math.sin(frame * 0.1 + point_idx * 0.5)))
+                    return (base_x, base_y - bounce)
+                elif animation_style == 'zoom_in':
+                    pulse = int(5 * math.sin(frame * 0.08 + point_idx))
+                    return (base_x + pulse, base_y + pulse)
+                elif animation_style == 'flip_in':
+                    flip_offset = int(15 * math.sin(frame * 0.05 + point_idx * 0.8))
+                    return (base_x + flip_offset, base_y)
+                else:  # typewriter or default
+                    return (base_x, base_y)
             
-            frame_count = 24 * 3  # Start from after title frames
-            
-            # Create a frame for each slide
-            for slide_idx, slide in enumerate(slides):
-                # Create new image
-                img = Image.new('RGB', (width, height), bg_color)
+            # Create animated title sequence
+            title_duration = 4
+            for i in range(24 * title_duration):
+                img = Image.new('RGB', (width, height), bg_gradient_start)
                 draw = ImageDraw.Draw(img)
                 
-                # Draw title
-                draw.rectangle([(0, 0), (width, 120)], fill=bg_color)
-                title_w, title_h = draw.textsize(slide['title'], font=title_font) if hasattr(draw, 'textsize') else (width//2, 60)
-                draw.text(((width-title_w)//2, 30), slide['title'], fill=title_color, font=title_font)
+                # Animated title with particle effects
+                progress = min(1.0, i / (24 * 2))
+                title_alpha = int(255 * progress)
                 
-                # Draw content in a box
-                draw.rectangle([(40, 140), (width-40, height-40)], fill=content_bg)
+                main_title = "🎬 AI Key Points Video Generator 🎬"
                 
-                # Wrap and draw content text
-                content = slide['content']
-                if len(content) > 500:  # Truncate if too long
-                    content = content[:497] + "..."
+                # Create title overlay with glow effect
+                title_overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+                title_draw = ImageDraw.Draw(title_overlay)
                 
-                # Break content into manageable lines
-                wrapper = textwrap.TextWrapper(width=70)
-                lines = wrapper.wrap(content)
+                title_bbox = title_draw.textbbox((0, 0), main_title, font=title_font)
+                title_w = title_bbox[2] - title_bbox[0]
+                title_x = (width - title_w) // 2
+                title_y = height // 2 - 50
                 
-                y_position = 160
-                for line in lines:
-                    draw.text((60, y_position), line, fill=content_color, font=content_font)
-                    y_position += 40
+                # Add glow effect
+                for offset in range(5):
+                    alpha = max(0, title_alpha - offset * 50)
+                    title_draw.text((title_x + offset, title_y + offset), main_title, 
+                                  fill=(100, 100, 255, alpha // 3), font=title_font)
                 
-                # Calculate duration based on content length (1 second per 10 chars, min 5, max 15)
-                duration = max(5, min(len(content) // 10, 15))
+                title_draw.text((title_x, title_y), main_title, 
+                              fill=(*title_color, title_alpha), font=title_font)
                 
-                # Save each frame for this slide
-                for i in range(24 * duration):  # 24fps * duration in seconds
-                    img.save(os.path.join(frames_dir, f"frame_{frame_count + i:05d}.jpg"), quality=95)
+                # Add floating particles
+                if progress > 0.5:
+                    for j in range(20):
+                        particle_x = random.randint(0, width)
+                        particle_y = random.randint(0, height)
+                        particle_size = random.randint(1, 4)
+                        particle_alpha = random.randint(100, 255)
+                        color = random.choice(point_colors)
+                        title_draw.ellipse([particle_x, particle_y, 
+                                          particle_x + particle_size, particle_y + particle_size],
+                                         fill=(*color, particle_alpha))
                 
-                frame_count += 24 * duration
+                img = Image.alpha_composite(img.convert('RGBA'), title_overlay).convert('RGB')
+                img = generator.add_background_elements(img, video_style, i)
+                
+                img.save(os.path.join(frames_dir, f"frame_{frame_count:05d}.jpg"), quality=95)
+                frame_count += 1
             
-            # Use FFMPEG directly via subprocess to create video from frames
-            import subprocess
+            # Create slides with animated key points
+            for slide_idx, slide in enumerate(slides):
+                key_points = slide['key_points']
+                slide_duration = max(10, len(key_points) * 4)  # 4 seconds per key point minimum
+                
+                # Create avatars for this slide
+                avatars = []
+                avatar_colors = random.sample(generator.animator.avatar_colors, slide['avatar_count'])
+                
+                for avatar_idx in range(slide['avatar_count']):
+                    avatars.append({
+                        'color': avatar_colors[avatar_idx],
+                        'position': (150 + avatar_idx * 250, height - 180),
+                        'expression': slide['mood'] if slide['mood'] in ['happy', 'excited'] else 'happy'
+                    })
+                
+                for frame in range(24 * slide_duration):
+                    img = Image.new('RGB', (width, height), bg_gradient_start)
+                    img = generator.add_background_elements(img, video_style, frame_count + frame)
+                    
+                    # Create overlay for animations
+                    overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+                    overlay_draw = ImageDraw.Draw(overlay)
+                    
+                    # Draw animated title
+                    title_y_offset = int(10 * math.sin((frame_count + frame) * 0.05))
+                    overlay_draw.rectangle([(0, 0 + title_y_offset), (width, 80 + title_y_offset)], 
+                                         fill=(*bg_gradient_end, 180))
+                    
+                    # Add emoji based on mood
+                    emoji_map = {
+                        'excited': '🎉',
+                        'funny': '😄',
+                        'educational': '📚',
+                        'happy': '😊',
+                        'default': '💡'
+                    }
+                    emoji = emoji_map.get(slide['mood'], '💡')
+                    
+                    full_title = f"{emoji} {slide['title']} {emoji}"
+                    title_bbox = overlay_draw.textbbox((0, 0), full_title, font=title_font)
+                    title_w = title_bbox[2] - title_bbox[0]
+                    overlay_draw.text(((width - title_w) // 2, 20 + title_y_offset), full_title, 
+                                    fill=title_color, font=title_font)
+                    
+                    # Animate key points with different styles
+                    for point_idx, point in enumerate(key_points):
+                        if len(point.strip()) == 0:
+                            continue
+                            
+                        # Calculate timing for each point
+                        point_start_time = point_idx * (slide_duration / len(key_points))
+                        point_duration = slide_duration / len(key_points) + 2
+                        current_time = frame / 24.0
+                        
+                        if current_time >= point_start_time:
+                            # Calculate progress for this point
+                            point_progress = min(1.0, (current_time - point_start_time) / point_duration)
+                            
+                            # Get animated position
+                            pos_x, pos_y = get_point_position(point_idx, len(key_points), frame, 
+                                                             width, height, slide['animation_style'])
+                            
+                            # Apply text animation
+                            animated_text = apply_animation(point, slide['animation_style'], 
+                                                          point_progress, len(point))
+                            
+                            if animated_text:
+                                # Create point background with animation effects
+                                point_color = point_colors[point_idx % len(point_colors)]
+                                
+                                # Animated background for point
+                                bg_alpha = int(200 * point_progress)
+                                bg_width = min(width - 200, len(animated_text) * 12)
+                                bg_height = 60
+                                
+                                # Add pulsing effect
+                                pulse = int(5 * math.sin(frame * 0.1 + point_idx))
+                                
+                                # Background with rounded corners effect
+                                overlay_draw.rounded_rectangle([
+                                    (pos_x - 20 + pulse, pos_y - 15 + pulse),
+                                    (pos_x + bg_width + pulse, pos_y + bg_height - 15 + pulse)
+                                ], radius=15, fill=(*point_color, bg_alpha // 2))
+                                
+                                # Add bullet point with animation
+                                bullet_symbols = ['●', '▶', '✦', '◆', '▸']
+                                bullet = bullet_symbols[point_idx % len(bullet_symbols)]
+                                
+                                # Bullet point with glow
+                                bullet_size = int(20 + 5 * math.sin(frame * 0.08 + point_idx))
+                                overlay_draw.text((pos_x, pos_y), bullet, 
+                                                fill=point_color, font=point_font)
+                                
+                                # Wrap text properly
+                                words = animated_text.split()
+                                lines = []
+                                current_line = []
+                                
+                                for word in words:
+                                    test_line = ' '.join(current_line + [word])
+                                    if len(test_line) > 60:  # Wrap at 60 characters
+                                        if current_line:
+                                            lines.append(' '.join(current_line))
+                                            current_line = [word]
+                                        else:
+                                            lines.append(word)
+                                    else:
+                                        current_line.append(word)
+                                
+                                if current_line:
+                                    lines.append(' '.join(current_line))
+                                
+                                # Draw text lines with shadow effect
+                                for line_idx, line in enumerate(lines[:3]):  # Max 3 lines per point
+                                    text_y = pos_y + line_idx * 25
+                                    
+                                    # Shadow
+                                    overlay_draw.text((pos_x + 32, text_y + 2), line, 
+                                                    fill=(0, 0, 0, 128), font=point_font)
+                                    # Main text
+                                    overlay_draw.text((pos_x + 30, text_y), line, 
+                                                    fill=(255, 255, 255), font=point_font)
+                                
+                                # Add sparkle effects for completed points
+                                if point_progress > 0.8:
+                                    for sparkle in range(3):
+                                        sparkle_x = pos_x + random.randint(-10, bg_width + 10)
+                                        sparkle_y = pos_y + random.randint(-10, bg_height + 10)
+                                        sparkle_size = random.randint(2, 5)
+                                        overlay_draw.ellipse([
+                                            sparkle_x, sparkle_y, 
+                                            sparkle_x + sparkle_size, sparkle_y + sparkle_size
+                                        ], fill=(*point_color, random.randint(150, 255)))
+                    
+                    # Composite the overlay
+                    img = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+                    draw = ImageDraw.Draw(img)
+                    
+                    # Add animated avatars
+                    for avatar_idx, avatar_info in enumerate(avatars):
+                        avatar = generator.animator.create_avatar(
+                            avatar_info['color'], 
+                            avatar_info['expression'], 
+                            frame_count + frame + avatar_idx * 10
+                        )
+                        
+                        # Avatar position with complex animation
+                        x, base_y = avatar_info['position']
+                        y = base_y + int(15 * math.sin((frame_count + frame + avatar_idx * 20) * 0.1))
+                        
+                        # Add side-to-side movement
+                        x += int(20 * math.cos((frame_count + frame + avatar_idx * 30) * 0.05))
+                        
+                        # Ensure avatar stays within bounds
+                        x = max(0, min(x, width - generator.animator.avatar_size))
+                        y = max(0, min(y, height - generator.animator.avatar_size))
+                        
+                        img.paste(avatar, (x, y), avatar)
+                        
+                        # Dynamic speech bubbles for key points
+                        if frame % 180 == avatar_idx * 60:  # Staggered comments every 7.5 seconds
+                            reactions = [
+                                "Great point! 💡", "Interesting! 🤔", "I see! 👀", 
+                                "Amazing! ✨", "Got it! 👍", "Wow! 🤯",
+                                "Makes sense! 🧠", "Brilliant! 🌟", "Exactly! ✅"
+                            ]
+                            reaction = random.choice(reactions)
+                            bubble = generator.animator.create_speech_bubble(
+                                reaction, (x, y - 50), frame_count + frame
+                            )
+                            bubble_x = max(0, min(x - 25, width - bubble.width))
+                            bubble_y = max(0, y - bubble.height - 20)
+                            img.paste(bubble, (bubble_x, bubble_y), bubble)
+                    
+                    # Enhanced progress indicator
+                    slide_progress = frame / (24 * slide_duration)
+                    progress_width = int((width - 200) * slide_progress)
+                    
+                    # Progress bar background
+                    draw.rectangle([(100, height - 35), (width - 100, height - 25)], fill=(60, 60, 60))
+                    
+                    # Animated progress bar
+                    gradient_colors = point_colors[:3]
+                    for i in range(progress_width):
+                        color_idx = int((i / progress_width) * (len(gradient_colors) - 1)) if progress_width > 0 else 0
+                        color = gradient_colors[color_idx]
+                        draw.line([(100 + i, height - 35), (100 + i, height - 25)], fill=color)
+                    
+                    # Progress text
+                    progress_text = f"Key Point {min(len(key_points), int(slide_progress * len(key_points)) + 1)} of {len(key_points)}"
+                    draw.text((width // 2 - 60, height - 50), progress_text, fill=(255, 255, 255), font=small_font)
+                    
+                    img.save(os.path.join(frames_dir, f"frame_{frame_count:05d}.jpg"), quality=95)
+                    frame_count += 1
             
-            # Construct ffmpeg command
+            # Enhanced ending sequence
+            ending_duration = 4
+            for i in range(24 * ending_duration):
+                img = Image.new('RGB', (width, height), bg_gradient_start)
+                img = generator.add_background_elements(img, video_style, frame_count + i)
+                
+                overlay = Image.new('RGBA', (width, height), (0, 0, 0, 0))
+                overlay_draw = ImageDraw.Draw(overlay)
+                
+                # Animated thank you message
+                thank_you = "Thanks for watching! 🎬✨"
+                subtitle = "Key points delivered with style! 💫"
+                
+                title_bbox = overlay_draw.textbbox((0, 0), thank_you, font=title_font)
+                title_w = title_bbox[2] - title_bbox[0]
+                
+                # Main title with rainbow effect
+                for j, char in enumerate(thank_you):
+                    char_color = point_colors[j % len(point_colors)]
+                    char_x = (width - title_w) // 2 + j * (title_w // len(thank_you))
+                    char_y = height // 2 - 60 + int(10 * math.sin((frame_count + i + j * 5) * 0.1))
+                    overlay_draw.text((char_x, char_y), char, fill=char_color, font=title_font)
+                
+                # Subtitle
+                sub_bbox = overlay_draw.textbbox((0, 0), subtitle, font=content_font)
+                sub_w = sub_bbox[2] - sub_bbox[0]
+                overlay_draw.text(((width - sub_w) // 2, height // 2 + 20), subtitle, 
+                                fill=(255, 255, 255), font=content_font)
+                
+                img = Image.alpha_composite(img.convert('RGBA'), overlay).convert('RGB')
+                draw = ImageDraw.Draw(img)
+                
+                # Final celebration avatars
+                for j in range(4):
+                    avatar = generator.animator.create_avatar(
+                        generator.animator.avatar_colors[j], 
+                        'excited', 
+                        frame_count + i + j * 15
+                    )
+                    x = 150 + j * 250
+                    y = height - 200 + int(30 * math.sin((frame_count + i + j * 10) * 0.2))
+                    img.paste(avatar, (x, y), avatar)
+                
+                # Add celebration particles
+                for k in range(50):
+                    particle_x = random.randint(0, width)
+                    particle_y = random.randint(0, height)
+                    particle_color = random.choice(point_colors)
+                    particle_size = random.randint(2, 8)
+                    draw.ellipse([particle_x, particle_y, 
+                                particle_x + particle_size, particle_y + particle_size],
+                               fill=particle_color)
+                
+                img.save(os.path.join(frames_dir, f"frame_{frame_count:05d}.jpg"), quality=95)
+                frame_count += 1
+            
+            # Use FFMPEG to create video with better quality
             ffmpeg_cmd = [
                 'ffmpeg',
-                '-y',  # Overwrite output file if it exists
+                '-y',  # Overwrite output file
                 '-framerate', '24',
                 '-i', os.path.join(frames_dir, 'frame_%05d.jpg'),
                 '-c:v', 'libx264',
-                '-profile:v', 'high',
-                '-crf', '20',  # Quality (lower is better)
+                '-preset', 'medium',
+                '-crf', '18',  # Better quality
                 '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',  # Enable streaming
                 output_path
             ]
             
             # Run ffmpeg
-            subprocess.run(ffmpeg_cmd, check=True)
+            result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                return jsonify({
+                    'error': f'FFMPEG error: {result.stderr}',
+                    'stdout': result.stdout
+                }), 500
             
             # Check if the video was created
             if not os.path.exists(output_path):
@@ -1852,23 +2439,32 @@ def generate_video():
             
             # Return the video file
             return send_file(output_path, as_attachment=True, 
-                            download_name='summary_video.mp4',
+                            download_name='key_points_video.mp4',
                             mimetype='video/mp4')
             
         finally:
-            # Clean up temporary files
+            # Clean up temporary files (with delay to ensure file is sent)
             import shutil
-            try:
-                shutil.rmtree(temp_dir)
-            except Exception as e:
-                print(f"Error cleaning up: {e}")
+            import threading
+            
+            def cleanup_later():
+                import time
+                time.sleep(5)  # Wait 5 seconds before cleanup
+                try:
+                    shutil.rmtree(temp_dir)
+                except Exception as e:
+                    print(f"Error cleaning up: {e}")
+            
+            cleanup_thread = threading.Thread(target=cleanup_later)
+            cleanup_thread.daemon = True
+            cleanup_thread.start()
                 
     except Exception as e:
         return jsonify({
-            'error': f'Error generating video: {str(e)}',
+            'error': f'Error generating enhanced video: {str(e)}',
             'traceback': traceback.format_exc()
         }), 500
-
+                
 ## A new feature for mcq generation
 def generate_mcqs_from_content(text, num_questions=5):
     """Generate MCQs using Gemini from the given content."""
