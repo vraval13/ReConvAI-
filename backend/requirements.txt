@@ -13,3 +13,4 @@ flask-bcrypt
 PyJWT
 redis
 pymongo
+sentence-transformers
