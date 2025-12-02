@@ -2537,6 +2537,5 @@ def handle_generate_mcq():
 if __name__ == '__main__':
     os.makedirs('templates', exist_ok=True)
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
-
-        
+    print(f"Starting server on port {port}")
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)        
