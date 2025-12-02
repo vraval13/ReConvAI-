@@ -12,3 +12,4 @@ gradio_client
 flask-bcrypt
 PyJWT
 redis
+pymongo
